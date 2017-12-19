@@ -1,0 +1,30 @@
+{
+  "name": "robot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuganghao/robot.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/liuganghao/robot/issues"
+  },
+  "homepage": "https://github.com/liuganghao/robot#readme",
+  "dependencies": {
+    "async-retry": "^1.1.4",
+    "axios": "^0.17.1",
+    "bl": "^1.2.1",
+    "debug": "^2.6.8",
+    "form-data": "^2.3.1",
+    "lowdb": "^1.0.0",
+    "mime": "^2.0.3",
+    "qrcode-terminal": "^0.11.0",
+    "request": "^2.79.0"
+  }
+}
