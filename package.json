@@ -15,6 +15,7 @@
     "debug": "^2.6.9",
     "form-data": "^2.3.1",
     "fs-extra": "^5.0.0",
+    "han": "0.0.7",
     "lowdb": "^1.0.0",
     "mime": "^2.0.3",
     "qrcode-terminal": "^0.11.0",
