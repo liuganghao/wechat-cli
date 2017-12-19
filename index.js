@@ -1,6 +1,6 @@
 // 导入基本模块
-var Session = require('./lib/session')
-var LocalDB = require('./lib/localdb')
+var wx = require('./lib/session')
+var storage = require('./lib/localdb').message
 var RemoteDB = require('./lib/leandb')
 
 var _ = require('lodash')
@@ -11,5 +11,4 @@ const debug = _debug('nodecli')
 const qrcode = require('qrcode-terminal')
 const axios = require('axios');
 
-let wx = new Session(setting);
 wx.start();
