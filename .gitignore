@@ -4,6 +4,7 @@ ehthumbs.db
 # runtime designtime ignorefile
 *.g.*
 *.r.*
+bak
 # Folder config file
 Desktop.ini
 
