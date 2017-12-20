@@ -5,6 +5,7 @@ ehthumbs.db
 *.g.*
 *.r.*
 bak
+rt
 # Folder config file
 Desktop.ini
 
