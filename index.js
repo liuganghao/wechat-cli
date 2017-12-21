@@ -94,10 +94,10 @@ async function waitForLogin(code) {
             break;
         case 201:
             // Confirm to login
-            session.avatar = window.userAvatar;
+            //session.avatar = window.userAvatar;
 
-            let ext = session.avatar.split(';')[0].match(/jpeg|jpg|png|gif/)[0];
-            let data = session.avatar.replace(/^data:image\/\w+;base64,/, "").replace(/^data:img\/\w+;base64,/, "");
+            let ext = window.userAvatar.split(';')[0].match(/jpeg|jpg|png|gif/)[0];
+            let data = window.userAvatar.replace(/^data:image\/\w+;base64,/, "").replace(/^data:img\/\w+;base64,/, "");
             let buf = new Buffer(data, 'base64');
             session.avatarurl = path.resolve('rt', 'avatar.' + ext);
             fs.writeFileSync(session.avatarurl, buf);
