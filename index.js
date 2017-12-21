@@ -1,3 +1,4 @@
+
 // 导入基本模块
 //var wx = require('./lib/session')
 // var storage = require('./lib/localdb').message
@@ -5,50 +6,32 @@
 
 const fs = require('fs-extra');
 const path = require('path');
-var _debug = require('debug')
+const _debug = require('debug')
 //const setting = require('./rt/demo_turing.json');
-const debug = _debug('nodecli')
-var api = require('./lib/wxapi')
-const emoji = require('./lib/emoji');
-var session = api.config.rt = {};
-const axios = require('axios');
 
+const api = require('./lib/wxapi')
+const emoji = require('./lib/emoji');
+const session = api.config.rt = {};
+const axios = require('axios');
+const helper = require('./lib/helper');
 const readline = require('readline');
+
+const debug = _debug('nodecli')
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: 'OH AI> '
+    prompt: '> '
 });
-
-
-rl.on('line', (line) => {
-    switch (line.trim()) {
-        case 'restart': restart();
-        case 'refreshContact': refreshContact();
-        case 'hello':
-            console.log('world!');
-            break;
-        default:
-            console.log(`Say what? I might have heard '${line.trim()}'`);
-            break;
-    }
-    if (!line.startsWith('[*]'))
-        rl.prompt();
-}).on('close', () => {
-    console.log('Have a great day!');
-    process.exit(0);
-});
-
-start();
-
 async function start() {
     let response = await api.getUUID()
     api.config.uuid = response.match(/[A-Za-z_\-\d]{10}==/)[0];
     debug('successd getCode:' + api.config.uuid);
-    console.log('[*]', (await api.showQrCode(api.config.uuid)).msg);
+    let rt = await api.showQrCode(api.config.uuid);
+    console.log('[*]', rt.msg);
+    console.log('[*]', rt.url);
+
     waitForLogin(api.config.uuid);
 }
-
 function restart() {
     api.config.wxConfig = {
         skey: '',
@@ -61,7 +44,6 @@ function restart() {
     api.config.rt = {};
     return start();
 }
-
 async function waitForLogin(code) {
     // Already logined
     if (session.auth) return;
@@ -100,6 +82,7 @@ async function waitForLogin(code) {
             session.contacts.forEach(c => {
                 c.updatedon = new Date().toLocaleString();
                 c.NickName = emoji.parser(c.NickName);
+                setRuntimeType(c);
             })
             api.config.syncKey = session.user.SyncKey;
             refreshContact();
@@ -143,25 +126,48 @@ async function refreshContact() {
                 existContact.updatedon = new Date().toLocaleString();
                 //...其他更新
             } else {
+                existContact = c;
                 c.updatedon = new Date().toLocaleString();
                 c.NickName = emoji.normalize(c.NickName);
                 session.contacts.push(c);
             }
+            setRuntimeType(existContact);
         });
+
         if (seq)
             loop();
     }
     await loop();
     console.log('[*]成功获取联系人:' + session.contacts.length)
     let str = '';
-    for (let index = 1; index < session.contacts.length; index++) {
+    for (let index = 1; index < session.contacts.length + 1; index++) {
         const c = session.contacts[index - 1];
         c.index = index;
-        str += `  (${index})` + c.NickName;
+        str += `  ${c.rttype}(${index})` + c.NickName;
         if (index % 5 == 0) { console.log('[*]' + str); str = '' }
     }
     console.log('[*]' + str);
 }
+function setRuntimeType(existContact) {
+    if (helper.isSpecialUsers(existContact)) {
+        existContact.rttype = 'special';
+    }
+    else if (helper.isOfficial(existContact)) {
+        existContact.rttype = 'official';
+    }
+    else if (helper.isBrand(existContact)) {
+        existContact.rttype = 'brand';
+    }
+    else if (helper.isChatRoom(existContact)) {
+        existContact.rttype = 'room';
+    }
+    else if (helper.isChatRoomRemoved(existContact)) {
+        existContact.rttype = 'roomRemoved';
+    } else if (helper.isContact(existContact, session)) {
+        existContact.rttype = 'contact';
+    }
+}
+
 async function keepalive() {
     console.log('[*]进入消息监听模式 ... 成功');
     let errcount = 0
@@ -202,3 +208,51 @@ async function keepalive() {
     }
     loop();
 }
+
+rl.on('line', (line) => {
+
+    if (line.startsWith('#c')) {
+        if (line == '#c') {
+            let str = '';
+            session.contacts.filter(f => f.rttype == 'contact').forEach((c, index) => {
+                str += `  (${c.index})` + c.NickName;
+                if (index % 5 == 1) { console.log('[*]' + str); str = '' }
+            })
+            console.log('[*]' + str);
+        } else {
+            let contactindex = parseInt(line.substr(2));
+            if (contactindex >= 0) {
+                session.toUser = session.contacts.find(f => f.index == contactindex);
+                rl.setPrompt(session.toUser.NickName + '>');
+            }
+        }
+
+        switch (line.trim()) {
+            case '#':
+                rl.setPrompt('> ');
+                session.toUser = null;
+                break;
+            case '#restart': restart();
+                break;
+            case '#refreshContact': refreshContact();
+                break;
+            case '#hello':
+                console.log('world!');
+                break;
+            default:
+                console.log(`Say what? I might have heard '${line.trim()}'`);
+                break;
+        }
+
+
+    } else {
+
+    }
+    if (!line.startsWith('[*]'))
+        rl.prompt();
+}).on('close', () => {
+    console.log('Have a great day!');
+    process.exit(0);
+});
+
+start();
