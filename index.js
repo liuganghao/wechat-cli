@@ -1,4 +1,3 @@
-
 // 导入基本模块
 //var wx = require('./lib/session')
 // var storage = require('./lib/localdb').message
@@ -11,7 +10,7 @@ const _debug = require('debug')
 
 const api = require('./lib/wxapi')
 const emoji = require('./lib/emoji');
-const session = api.config.rt = {};
+const session = api.config.rt;
 const axios = require('axios');
 const helper = require('./lib/helper');
 const readline = require('readline');
@@ -23,14 +22,18 @@ const rl = readline.createInterface({
     prompt: '> '
 });
 async function start() {
-    let response = await api.getUUID()
-    api.config.uuid = response.match(/[A-Za-z_\-\d]{10}==/)[0];
-    debug('successd getCode:' + api.config.uuid);
-    let rt = await api.showQrCode(api.config.uuid);
-    console.log('[*]', rt.msg);
-    console.log('[*]', rt.url);
+    if (api.config.wxConfig && api.config.wxConfig.pass_ticket) {
+        keepalive();
+    } else {
+        let response = await api.getUUID()
+        api.config.uuid = response.match(/[A-Za-z_\-\d]{10}==/)[0];
+        debug('successd getCode:' + api.config.uuid);
+        let rt = await api.showQrCode(api.config.uuid);
+        console.log('[*]', rt.msg);
+        console.log('[*]', rt.url);
 
-    waitForLogin(api.config.uuid);
+        waitForLogin(api.config.uuid);
+    }
 }
 function restart() {
     api.config.wxConfig = {
@@ -77,15 +80,16 @@ async function waitForLogin(code) {
             }
             if (response.headers['set-cookie'])
                 api.config.wxCookie = response.headers['set-cookie']
-            session.user = JSON.parse(await api.wxInit());
-            session.contacts = session.user.ContactList;
+            session.auth = JSON.parse(await api.wxInit());
+            session.contacts = session.auth.ContactList;
             session.contacts.forEach(c => {
                 c.updatedon = new Date().toLocaleString();
                 c.NickName = emoji.parser(c.NickName);
                 setRuntimeType(c);
             })
-            api.config.syncKey = session.user.SyncKey;
+            api.config.syncKey = session.auth.SyncKey;
             refreshContact();
+            fs.writeJsonSync('./rt/config.r.json', api.config);
             keepalive();
             break;
         case 201:
@@ -184,11 +188,11 @@ async function keepalive() {
             debug(`syncCheck.retcode:${retcode}, syncCheck.selector: ${selector}`)
             if (retcode === 1100) {
                 console.log('[*]你在手机上登出了微信，债见')
-                api.config.rt = null;
+                restart();
                 return;
             } else if (retcode === 1101) {
                 console.log('[*]你在其他地方登录了 WEB 版微信，债见');
-                api.config.rt = null;
+                restart();
                 return;
             } else if (retcode === 0) {
                 // 2, Has new message
@@ -204,15 +208,29 @@ async function keepalive() {
             console.error(err);
             setTimeout(() => { errcount++; loop() }, 3000)
         }
-        setTimeout(() => { loop() }, 1000)
+        setTimeout(() => { loop() }, 60 * 1000)
     }
     loop();
 }
 
-rl.on('line', (line) => {
-
-    if (line.startsWith('#c')) {
-        if (line == '#c') {
+rl.on('line', async (line) => {
+    switch (line.toLowerCase().trim()) {
+        case '#':
+            rl.setPrompt('> ');
+            session.toUser = null;
+            return
+        case '#restart': restart();
+            return
+        case '#rc': refreshContact();
+            return
+        case '#hello':
+            console.log('world!');
+            return
+        default:
+            console.log(`Say what? I might have heard '${line.trim()}'`);
+    }
+    if (line.toLowerCase().startsWith('#c')) {
+        if (line.toLowerCase() == '#c') {
             let str = '';
             session.contacts.filter(f => f.rttype == 'contact').forEach((c, index) => {
                 str += `  (${c.index})` + c.NickName;
@@ -226,27 +244,8 @@ rl.on('line', (line) => {
                 rl.setPrompt(session.toUser.NickName + '>');
             }
         }
-
-        switch (line.trim()) {
-            case '#':
-                rl.setPrompt('> ');
-                session.toUser = null;
-                break;
-            case '#restart': restart();
-                break;
-            case '#refreshContact': refreshContact();
-                break;
-            case '#hello':
-                console.log('world!');
-                break;
-            default:
-                console.log(`Say what? I might have heard '${line.trim()}'`);
-                break;
-        }
-
-
-    } else {
-
+    } else if (session.toUser) {
+        await api.wxSendTextMsg(line, session.auth.User.UserName, session.toUser.UserName)
     }
     if (!line.startsWith('[*]'))
         rl.prompt();
