@@ -35,6 +35,7 @@ async function start() {
         waitForLogin(api.config.uuid);
     }
 }
+
 function restart() {
     api.config.wxConfig = {
         skey: '',
@@ -121,7 +122,7 @@ async function waitForLogin(code) {
 }
 async function refreshContact() {
     let seq = 0;
-    let loop = async () => {
+    let loop = async() => {
         let getContact_data = JSON.parse(await api.getContact(seq));
         seq = getContact_data.seq
         getContact_data.MemberList.forEach(c => {
@@ -147,25 +148,25 @@ async function refreshContact() {
     for (let index = 1; index < session.contacts.length + 1; index++) {
         const c = session.contacts[index - 1];
         c.index = index;
-        str += `  ${c.rttype}(${index})` + c.NickName;
-        if (index % 5 == 0) { console.log('[*]' + str); str = '' }
+        str += `  ${c.rttype.substr(0,1).toUpperCase()}(${index})` + c.NickName;
+        if (index % 5 == 0) {
+            console.log('[*]' + str);
+            str = ''
+        }
     }
     console.log('[*]' + str);
 }
+
 function setRuntimeType(existContact) {
     if (helper.isSpecialUsers(existContact)) {
         existContact.rttype = 'special';
-    }
-    else if (helper.isOfficial(existContact)) {
+    } else if (helper.isOfficial(existContact)) {
         existContact.rttype = 'official';
-    }
-    else if (helper.isBrand(existContact)) {
+    } else if (helper.isBrand(existContact)) {
         existContact.rttype = 'brand';
-    }
-    else if (helper.isChatRoom(existContact)) {
+    } else if (helper.isChatRoom(existContact)) {
         existContact.rttype = 'room';
-    }
-    else if (helper.isChatRoomRemoved(existContact)) {
+    } else if (helper.isChatRoomRemoved(existContact)) {
         existContact.rttype = 'roomRemoved';
     } else if (helper.isContact(existContact, session)) {
         existContact.rttype = 'contact';
@@ -175,7 +176,7 @@ function setRuntimeType(existContact) {
 async function keepalive() {
     console.log('[*]进入消息监听模式 ... 成功');
     let errcount = 0
-    let loop = async () => {
+    let loop = async() => {
         if (!api.config.rt || errcount > 20) {
             return;
         }
@@ -206,22 +207,29 @@ async function keepalive() {
             }
         } catch (err) {
             console.error(err);
-            setTimeout(() => { errcount++; loop() }, 3000)
+            setTimeout(() => {
+                errcount++;
+                loop()
+            }, 3000)
         }
-        setTimeout(() => { loop() }, 60 * 1000)
+        setTimeout(() => {
+            loop()
+        }, 60 * 1000)
     }
     loop();
 }
 
-rl.on('line', async (line) => {
+rl.on('line', async(line) => {
     switch (line.toLowerCase().trim()) {
         case '#':
             rl.setPrompt('> ');
             session.toUser = null;
             return
-        case '#restart': restart();
+        case '#restart':
+            restart();
             return
-        case '#rc': refreshContact();
+        case '#rc':
+            refreshContact();
             return
         case '#hello':
             console.log('world!');
@@ -234,7 +242,10 @@ rl.on('line', async (line) => {
             let str = '';
             session.contacts.filter(f => f.rttype == 'contact').forEach((c, index) => {
                 str += `  (${c.index})` + c.NickName;
-                if (index % 5 == 1) { console.log('[*]' + str); str = '' }
+                if (index % 5 == 1) {
+                    console.log('[*]' + str);
+                    str = ''
+                }
             })
             console.log('[*]' + str);
         } else {
