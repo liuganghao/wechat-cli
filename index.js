@@ -46,11 +46,14 @@ function restart() {
     };
     api.config.wxCookie = null;
     api.config.rt = {};
+    session.auth = {}
+    session.contacts = [];
+    session.toUser = ''
     return start();
 }
 async function waitForLogin(code) {
     // Already logined
-    if (session.auth) return;
+    if (api.config.pass_ticket) return;
     let response_data = await api.waitForLogin(0, code)
     let window = {}
     eval(response_data);
@@ -89,8 +92,8 @@ async function waitForLogin(code) {
                 setRuntimeType(c);
             })
             api.config.syncKey = session.auth.SyncKey;
-            refreshContact();
             fs.writeJsonSync('./rt/config.r.json', api.config);
+            refreshContact();
             keepalive();
             break;
         case 201:
@@ -126,17 +129,8 @@ async function refreshContact() {
         let getContact_data = JSON.parse(await api.getContact(seq));
         seq = getContact_data.seq
         getContact_data.MemberList.forEach(c => {
-            let existContact = session.contacts.find(f => c.UserName == f.UserName);
-            if (existContact) {
-                existContact.updatedon = new Date().toLocaleString();
-                //...其他更新
-            } else {
-                existContact = c;
-                c.updatedon = new Date().toLocaleString();
-                c.NickName = emoji.normalize(c.NickName);
-                session.contacts.push(c);
-            }
-            setRuntimeType(existContact);
+            updateContact(c);
+            debug('refreshcontact成功获取联系人：' + c.NickName);
         });
 
         if (seq)
@@ -155,6 +149,22 @@ async function refreshContact() {
         }
     }
     console.log('[*]' + str);
+}
+
+function updateContact(c) {
+    let existContact = session.contacts.find(f => c.UserName == f.UserName);
+    if (existContact) {
+        existContact.updatedon = new Date().toLocaleString();
+        //...其他更新
+        // existContact.NickName = c.NickName;
+        // console.log('更新联系人：' + existContact.NickName + '->' + c.NickName)
+    } else {
+        existContact = c;
+        c.updatedon = new Date().toLocaleString();
+        c.NickName = emoji.normalize(c.NickName);
+        session.contacts.push(c);
+    }
+    setRuntimeType(existContact);
 }
 
 function setRuntimeType(existContact) {
@@ -189,35 +199,86 @@ async function keepalive() {
             debug(`syncCheck.retcode:${retcode}, syncCheck.selector: ${selector}`)
             if (retcode === 1100) {
                 console.log('[*]你在手机上登出了微信，债见')
-                restart();
-                return;
+                return 'restart'
             } else if (retcode === 1101) {
                 console.log('[*]你在其他地方登录了 WEB 版微信，债见');
-                restart();
-                return;
+                return 'restart'
             } else if (retcode === 0) {
                 // 2, Has new message
                 // 6, New friend
                 // 4, Conversation refresh ?
                 // 7, Exit or enter
-                if (selector !== 0) {
+                if (selector == 2) {
                     console.log('[*]你有新的消息，请注意查收')
                     // await this.getNewMessage();
+                } else if (selector == 6) {
+                    console.log('[*] 收到疑似红包消息')
+                } else if (selector == 7) {
+                    console.log('[*] 你在手机上玩微信被我发现了')
+                } else if (selector == 0) {
+                    //console.log('[*] 收到疑似红包消息')
+                } else {
+                    console.log('[*] 这个消息无法处理retcode:0,selector:' + selector)
                 }
             }
         } catch (err) {
             console.error(err);
             setTimeout(() => {
                 errcount++;
-                loop()
+                return loop()
             }, 3000)
         }
         setTimeout(() => {
-            loop()
+            return loop()
         }, 60 * 1000)
     }
-    loop();
+    if (await loop() == 'restart')
+        restart();
 }
+
+async function getNewMessage() {
+    let auth = session.auth;
+    let response = await api.webWxSync();
+    let mods = [];
+
+    // Refresh the sync keys
+    api.config.SyncKey = response.data.SyncCheckKey;
+
+    // Get the new friend, or chat room has change
+    response.data.ModContactList.map(c => {
+        if (session.contacts.find(f => f.UserName == c.UserName))
+            updateContact(c);
+        else mods.push(c.UserName)
+    });
+
+    // Delete user
+    response.data.DelContactList.map(c => {
+        session.contacts.shift(f => f.UserName == c.UserName);
+        console.log('删除联系人：' + c.NickName);
+    });
+
+    if (mods.length) {
+        debug('新增联系人数量：' + mods.length)
+        let rp_data = JSON.parse(await api.getContact(0, mods));
+        rp_data.MemberList.forEach(c => {
+            updateContact(c);
+            debug('成功更新联系人：' + c.NickName);
+        });
+    }
+
+    response.data.AddMsgList.map(e => {
+        var from = e.FromUserName;
+        var to = e.ToUserName;
+        var fromYourPhone = from === self.user.User.UserName && from !== to;
+
+        e.Content = emoji.normalize(e.Content);
+
+        console.log(JSON.stringify(e));
+    });
+
+    return response.data;
+}
+
 
 rl.on('line', async(line) => {
     switch (line.toLowerCase().trim()) {
