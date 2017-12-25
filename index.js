@@ -14,17 +14,45 @@ var session = {};
 const axios = require('axios');
 const helper = require('./lib/helper');
 const readline = require('readline');
-var db = {};
-const debug = _debug('nodecli')
+var db = { contacts: [], messages: [] };
+const debug = _debug('nodecli');
+
+// 对Date的扩展，将 Date 转化为指定格式的String
+// 月(M)、日(d)、小时(h)、分(m)、秒(s)、季度(q) 可以用 1-2 个占位符， 
+// 年(y)可以用 1-4 个占位符，毫秒(S)只能用 1 个占位符(是 1-3 位的数字) 
+// 例子： 
+// (new Date()).Format("yyyy-MM-dd hh:mm:ss.S") ==> 2006-07-02 08:09:04.423 
+// (new Date()).Format("yyyy-M-d h:m:s.S")  ==> 2006-7-2 8:9:4.18 
+Date.prototype.Format = function (fmt) { //author: meizz 
+    var o = {
+        "M+": this.getMonth() + 1, //月份 
+        "d+": this.getDate(), //日 
+        "h+": this.getHours(), //小时 
+        "m+": this.getMinutes(), //分 
+        "s+": this.getSeconds(), //秒 
+        "q+": Math.floor((this.getMonth() + 3) / 3), //季度 
+        "S": this.getMilliseconds() //毫秒 
+    };
+    if (/(y+)/.test(fmt)) fmt = fmt.replace(RegExp.$1, (this.getFullYear() + "").substr(4 - RegExp.$1.length));
+    for (var k in o)
+        if (new RegExp("(" + k + ")").test(fmt)) fmt = fmt.replace(RegExp.$1, (RegExp.$1.length == 1) ? (o[k]) : (("00" + o[k]).substr(("" + o[k]).length)));
+    return fmt;
+}
+
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt: '> '
 });
 async function start() {
-    if (fs.existsSync(path.resolve(__dirname, './rt/session.r.json')))
+    if (fs.existsSync(path.resolve(__dirname, './rt/session.r.json'))) {
         session = require('./rt/session.r.json');
-
+        if (fs.existsSync(path.resolve(__dirname, './rt/contacts.r.json'))) {
+            db.contacts = fs.readJsonSync(path.resolve(__dirname, './rt/contacts.r.json'))
+        } else {
+            refreshContact();
+        }
+    }
     if (session && session.pass_ticket) {
         keepalive();
     } else {
@@ -41,9 +69,16 @@ async function start() {
 function restart() {
     if (fs.existsSync(path.resolve(__dirname, './rt/session.r.json'))) {
         let sback = require('./rt/session.r.json');
-        fs.writeJSONSync(path.resolve(__dirname, './rt/' + sback.NickName + '_' + sback.createdon + '.r.json'), sback);
+        fs.writeJSONSync(path.resolve(__dirname, './rt/' + sback.auth.User.NickName + '_' + new Date(sback.createdon).Format('yyyyMMddhhmmss') + '.r.json'), sback);
         fs.removeSync(path.resolve(__dirname, './rt/session.r.json'));
+        // if (fs.existsSync(path.resolve(__dirname, './rt/' + sback.auth.User.NickName + '.r.json'))) {
+        //     let cback = require('./rt/' + sback.auth.User.NickName + '_contacts.r.json');
+        //     fs.writeJSONSync(path.resolve(__dirname, './rt/' + sback.auth.User.NickName + '_' + new Date(sback.createdon).Format('yyyyMMddhhmmss') + '_contacts.r.json'), sback);
+        //     fs.removeSync(path.resolve('./rt/' + sback.auth.User.NickName + '_contacts.r.json'));
+        // }
     }
+
+    session = {};
     return start();
 }
 async function waitForLogin(code) {
@@ -71,8 +106,8 @@ async function waitForLogin(code) {
                 debug('Your login may be compromised. For account security, you cannot log in to Web WeChat. You can try mobile WeChat or Windows WeChat.');
                 restart();
             }
+            session.createdon = new Date()
             session.auth = JSON.parse(await api.wxInit(session));
-            session.syncKey = session.auth.SyncKey;
             fs.writeJsonSync('./rt/session.r.json', session);
 
             db.contacts = session.auth.ContactList;
@@ -127,6 +162,7 @@ async function refreshContact() {
             loop();
     }
     await loop();
+    fs.writeJsonSync(path.resolve(__dirname, './rt/contacts.r.json'), db.contacts);
     console.log('[*]成功获取联系人:' + db.contacts.length)
     let str = '';
     for (let index = 1; index < db.contacts.length + 1; index++) {
@@ -185,6 +221,7 @@ async function keepalive() {
             return;
         }
         try {
+            errcount = 0
             var response_syncCheck_data = await api.syncCheck(session)
             let window = {};
             eval(response_syncCheck_data);
@@ -224,10 +261,248 @@ async function keepalive() {
         }
         setTimeout(() => {
             return loop()
-        }, 10 * 1000)
+        }, 5 * 1000)
     }
     if (await loop() == 'restart')
         restart();
+}
+
+function resolveMessage(message) {
+    message.from = db.contacts.find(f => f.UserName == message.FromUserName);
+    message.to = session.auth.User;
+    if (message.ToUserName != session.auth.User.UserName)
+        console.error('给我发消息为ToUserName啥不是当前登录用户？？');
+    // var isChatRoom = helper.isChatRoom(message.FromUserName);
+    // var content = (isChatRoom && !message.isme) ? message.Content.split(':<br/>')[1] : message.Content;
+    var content = emoji.normalize(message.Content);
+    switch (message.MsgType) {
+        case 1:
+            // Text message and Location SubMsgType == 48
+            if (message.Url && message.OriContent) {
+                // This message is a location
+                let parts = message.Content.split(':<br/>');
+                let location = helper.parseKV(message.OriContent);
+
+                location.image = `https://${session.host}/${parts[1]}`.replace(/\/+/g, '/');
+                location.href = message.Url;
+
+                message.location = location;
+
+                console.log(message.from.NickName + ' 发送了一个 位置消息 - 我在 ' + message.location.poiname)
+                console.log('=======================')
+                console.log('= 标题:' + message.location.poiname)
+                console.log('= 描述:' + message.location.label)
+                console.log('= 链接:' + message.location.href)
+                console.log('= 坐标(x,y):' + message.location.x + ' , ' + message.location.y)
+                console.log('= 图片:' + message.location.image)
+                console.log('=======================')
+
+            } else {
+                console.log(message.from.NickName + ' ：' + content)
+            }
+            break;
+        case 3:
+            // Image
+            let image = helper.parseKV(content);
+            image.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${session.skey}`;
+            message.image = image;
+            console.log(message.from.NickName + ' 发送了一张图片:' + image.src);
+            break;
+
+        case 34:
+            // Voice
+            let voice = helper.parseKV(content);
+            voice.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetvoice?&msgid=${message.MsgId}&skey=${session.skey}`;
+            message.voice = voice;
+            console.log(message.from.NickName + ' 发送了一段语音:' + voice.src);
+            break;
+        case 42:
+            // Contact
+            let contact = message.RecommendInfo;
+
+            contact.image = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgeticon?seq=0&username=${contact.UserName}&skey=${session.skey}&msgid=${message.MsgId}`;
+            contact.name = contact.NickName;
+            contact.address = `${contact.Province || 'UNKNOW'}, ${contact.City || 'UNKNOW'}`;
+            message.contact = contact;
+            console.log(message.from.NickName + ' 发送了一张名片:');
+            console.log('=======================')
+            console.log('= 昵称:' + contact.NickName)
+            console.log('= 微信号:' + contact.Alias)
+            console.log('= 地区:' + contact.Province + ' - ' + contact.City)
+            console.log('= 性别:' + ['未知', '男', '女'][contact.Sex])
+            console.log('=======================')
+            break;
+        case 62:
+        case 43:
+            // Video
+            let video = {
+                cover: `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&MsgId=${message.MsgId}&skey=${session.skey}&type=slave`,
+                src: `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetvideo?msgid=${message.MsgId}&skey=${session.skey}`,
+            };
+
+            message.video = video;
+            console.log(message.from.NickName + ' 发送了一段视频:' + video.src);
+            break;
+        case 47:
+            // External emoji
+            if (!content) break;
+
+            {
+                let emoji = helper.parseKV(content);
+
+                emoji.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${session.skey}`;
+                message.emoji = emoji;
+                console.log(message.from.NickName + ' 发送了一个动画表情:' + emoji.src);
+            }
+            break;
+
+        case 48:
+            console.log(message.from.NickName + ' LOCATION:' + JSON.stringify(message));
+            break;
+        case 49:
+            switch (message.AppMsgType) {
+                case 2000:
+                    // Transfer
+                    let { value } = helper.parseXml(message.Content, 'des');
+
+                    message.MsgType += 2000;
+                    message.transfer = {
+                        desc: value.des,
+                        money: +value.match(/[\d.]+元/)[0].slice(0, -1),
+                    };
+                    console.log(message.from.NickName + ' 转账给您:' + message.transfer.money);
+                    break;
+                case 2001:
+                    console.log(message.from.NickName + ' 发了个红包给您:' + JSON.stringify(message));
+                    break;
+                case 17:
+                    // Location sharing...
+                    message.MsgType += 17;
+                    console.log(JSON.stringify(message));
+                    console.log(message.from.NickName + ' REALTIME_SHARE_LOCATION ...');
+                    break;
+                case 16:
+                    console.log(message.from.NickName + ' CARD_TICKET:' + JSON.stringify(message));
+                    break;
+                case 15:
+                    console.log(message.from.NickName + ' EMOTION:' + JSON.stringify(message));
+                    break;
+                case 13:
+                    console.log(message.from.NickName + ' GOOD:' + JSON.stringify(message));
+                    break;
+                case 10:
+                    console.log(message.from.NickName + ' SCAN_GOOD:' + JSON.stringify(message));
+                    break;
+                case 9:
+                    console.log(message.from.NickName + ' GOOD:' + JSON.stringify(message));
+                    break;
+                case 8:
+                    // Animated emoji
+                    if (!content) break;
+
+                    {
+                        let emoji = helper.parseKV(content) || {};
+
+                        emoji.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${session.skey}&type=big`;
+                        message.MsgType += 8;
+                        message.emoji = emoji;
+                    }
+                    break;
+                case 6:
+                    // Receive file
+                    let file = {
+                        name: message.FileName,
+                        size: message.FileSize,
+                        mediaId: message.MediaId,
+                        extension: (message.FileName.match(/\.\w+$/) || [])[0],
+                    };
+                    // file.uid = await helper.getCookie('wxuin');
+                    // file.ticket = await helper.getCookie('webwx_data_ticket');
+                    // file.download = `${axios.defaults.baseURL.replace(/^https:\/\//, 'https://file.')}cgi-bin/mmwebwx-bin/webwxgetmedia?sender=${message.FromUserName}&mediaid=${file.mediaId}&filename=${file.name}&fromuser=${file.uid}&pass_ticket=undefined&webwx_data_ticket=${file.ticket}`;
+
+                    message.MsgType += 6;
+                    message.file = file;
+                    message.download = {
+                        done: false,
+                    };
+
+                    console.log(message.from.NickName + ' 分享了一个文件');
+                    console.log('=======================')
+                    console.log('= 文件名:' + file.name)
+                    console.log('= 文件大小:' + file.size)
+                    console.log('= 下载地址:' + file.download)
+                    console.log('= 文件类型:' + file.extension)
+                    console.log('=======================')
+                    break;
+                case 5:
+                    console.log(message.from.NickName + ' URL:' + JSON.stringify(message));
+                    break;
+                case 4:
+                    console.log(message.from.NickName + ' VIDEO:' + JSON.stringify(message));
+                    break;
+                case 3:
+                    console.log(message.from.NickName + ' AUDIO:' + JSON.stringify(message));
+                    break;
+                case 2:
+                    console.log(message.from.NickName + ' IMG:' + JSON.stringify(message));
+                    break;
+                case 1:
+                    console.log(message.from.NickName + ' TEXT:' + JSON.stringify(message));
+                    break;
+                default:
+                    console.error('Unknow app message: %o', Object.assign({}, message));
+                    message.Content = `收到一条暂不支持的消息类型，请在手机上查看（${message.FileName || 'No Title'}）。`;
+                    message.MsgType = 19999;
+                    break;
+            }
+            break;
+        case 50:
+            console.log(message.from.NickName + ' VOIPMSG:' + JSON.stringify(message));
+            break;
+        case 51:
+            console.log(message.from.NickName + ' STATUSNOTIFY:' + JSON.stringify(message));
+            break;
+        case 52:
+            console.log(message.from.NickName + ' VOIPNOTIFY:' + JSON.stringify(message));
+            break;
+        case 53:
+            console.log(message.from.NickName + ' VOIPINVITE:' + JSON.stringify(message));
+            break;
+        case 10002:
+            let text = isChatRoom ? message.Content.split(':<br/>').slice(-1).pop() : message.Content;
+            let { value } = helper.parseXml(text, ['replacemsg', 'msgid']);
+
+            if (!settings.blockRecall) {
+                self.deleteMessage(message.FromUserName, value.msgid);
+            }
+            message.Content = value.replacemsg;
+            message.MsgType = 19999;
+            break;
+        case 10000:
+            // let userid = message.FromUserName;
+
+            // // Refresh the current chat room info
+            // if (helper.isChatRoom(userid)) {
+            //     let user = await contacts.getUser(userid);
+
+            //     if (userid === self.user.UserName) {
+            //         self.chatTo(user);
+            //     }
+
+            //     if (members.show
+            //         && members.user.UserName === userid) {
+            //         members.toggle(true, user);
+            //     }
+            // }
+            break;
+
+        default:
+            // Unhandle message
+            message.Content = 'Unknow message type: ' + message.MsgType;
+            message.MsgType = 19999;
+    }
+
+    return message;
 }
 
 async function getNewMessage() {
@@ -250,7 +525,7 @@ async function getNewMessage() {
         console.log('删除联系人：' + c.NickName);
     });
 
-    if (mods.length) {
+    if (!!mods.length) {
         debug('新增联系人数量：' + mods.length)
         let rp_data = JSON.parse(await api.getContact(session, 0, mods));
         rp_data.MemberList.forEach(c => {
@@ -263,10 +538,10 @@ async function getNewMessage() {
         // var from = e.FromUserName;
         // var to = e.ToUserName;
         // var fromYourPhone = from === self.user.User.UserName && from !== to;
-
-        e.Content = emoji.normalize(e.Content);
-        console.log(e.Content);
         debug(JSON.stringify(e));
+        let msg = resolveMessage(e);
+        db.messages.push(msg);
+        fs.writeJSON('./rt/message.r.json', db.messages);
     });
 
     return rd;
