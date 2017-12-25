@@ -167,8 +167,11 @@ function setRuntimeType(existContact) {
     }
     else if (helper.isChatRoomRemoved(existContact)) {
         existContact.rttype = 'roomRemoved';
-    } else if (helper.isContact(existContact, session)) {
+    }
+    else if (helper.isContact(existContact, session)) {
         existContact.rttype = 'contact';
+    } else {
+        console.error('rttype设置失败：' + JSON.stringify(existContact))
     }
 }
 
