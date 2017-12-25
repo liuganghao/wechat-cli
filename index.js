@@ -10,11 +10,11 @@ const _debug = require('debug')
 
 const api = require('./lib/wxapi')
 const emoji = require('./lib/emoji');
-const session = api.config.rt;
+var session = {};
 const axios = require('axios');
 const helper = require('./lib/helper');
 const readline = require('readline');
-
+var db = {};
 const debug = _debug('nodecli')
 const rl = readline.createInterface({
     input: process.stdin,
@@ -22,38 +22,33 @@ const rl = readline.createInterface({
     prompt: '> '
 });
 async function start() {
-    if (api.config.wxConfig && api.config.wxConfig.pass_ticket) {
+    if (fs.existsSync(path.resolve(__dirname, './rt/session.r.json')))
+        session = require('./rt/session.r.json');
+
+    if (session && session.pass_ticket) {
         keepalive();
     } else {
         let response = await api.getUUID()
-        api.config.uuid = response.match(/[A-Za-z_\-\d]{10}==/)[0];
-        debug('successd getCode:' + api.config.uuid);
-        let rt = await api.showQrCode(api.config.uuid);
+        session.uuid = response.match(/[A-Za-z_\-\d]{10}==/)[0];
+        debug('successd getCode:' + session.uuid);
+        let rt = await api.showQrCode(session.uuid);
         console.log('[*]', rt.msg);
         console.log('[*]', rt.url);
-
-        waitForLogin(api.config.uuid);
+        waitForLogin(session.uuid);
     }
 }
 
 function restart() {
-    api.config.wxConfig = {
-        skey: '',
-        wxsid: '',
-        wxuin: '',
-        pass_ticket: '',
-        host: ''
-    };
-    api.config.wxCookie = null;
-    api.config.rt = {};
-    session.auth = {}
-    session.contacts = [];
-    session.toUser = ''
+    if (fs.existsSync(path.resolve(__dirname, './rt/session.r.json'))) {
+        let sback = require('./rt/session.r.json');
+        fs.writeJSONSync(path.resolve(__dirname, './rt/' + sback.NickName + '_' + sback.createdon + '.r.json'), sback);
+        fs.removeSync(path.resolve(__dirname, './rt/session.r.json'));
+    }
     return start();
 }
 async function waitForLogin(code) {
     // Already logined
-    if (api.config.pass_ticket) return;
+    if (session && session.pass_ticket) return;
     let response_data = await api.waitForLogin(0, code)
     let window = {}
     eval(response_data);
@@ -64,35 +59,30 @@ async function waitForLogin(code) {
             let authAddress = window.redirect_uri.match(/^https:\/\/(.*?)\//)[1];
 
             // Set your weChat network route, otherwise you will got a code '1102'
-            axios.defaults.baseURL = authAddress;
-            api.config.wxConfig.host = authAddress;
+            session.host = authAddress;
             // Login success, create session
-            let response = await axios.get(window.redirect_uri, {
-                params: {
-                    fun: 'new',
-                    version: 'v2',
-                }
-            });
+            let rd = await api.login(session, window.redirect_uri);
             try {
-                api.config.wxConfig.skey = response.data.match(/<skey>(.*?)<\/skey>/)[1];
-                api.config.wxConfig.pass_ticket = response.data.match(/<pass_ticket>(.*?)<\/pass_ticket>/)[1];
-                api.config.wxConfig.wxsid = response.data.match(/<wxsid>(.*?)<\/wxsid>/)[1];
-                api.config.wxConfig.wxuin = response.data.match(/<wxuin>(.*?)<\/wxuin>/)[1];
+                session.skey = rd.match(/<skey>(.*?)<\/skey>/)[1];
+                session.pass_ticket = rd.match(/<pass_ticket>(.*?)<\/pass_ticket>/)[1];
+                session.wxsid = rd.match(/<wxsid>(.*?)<\/wxsid>/)[1];
+                session.wxuin = rd.match(/<wxuin>(.*?)<\/wxuin>/)[1];
             } catch (ex) {
                 debug('Your login may be compromised. For account security, you cannot log in to Web WeChat. You can try mobile WeChat or Windows WeChat.');
                 restart();
             }
-            if (response.headers['set-cookie'])
-                api.config.wxCookie = response.headers['set-cookie']
-            session.auth = JSON.parse(await api.wxInit());
-            session.contacts = session.auth.ContactList;
-            session.contacts.forEach(c => {
+            session.auth = JSON.parse(await api.wxInit(session));
+            session.syncKey = session.auth.SyncKey;
+            fs.writeJsonSync('./rt/session.r.json', session);
+
+            db.contacts = session.auth.ContactList;
+            db.contacts.forEach(c => {
                 c.updatedon = new Date().toLocaleString();
                 c.NickName = emoji.parser(c.NickName);
                 setRuntimeType(c);
             })
-            api.config.syncKey = session.auth.SyncKey;
-            fs.writeJsonSync('./rt/config.r.json', api.config);
+
+            fs.writeJsonSync('./rt/session.r.json', session);
             refreshContact();
             keepalive();
             break;
@@ -125,8 +115,8 @@ async function waitForLogin(code) {
 }
 async function refreshContact() {
     let seq = 0;
-    let loop = async() => {
-        let getContact_data = JSON.parse(await api.getContact(seq));
+    let loop = async () => {
+        let getContact_data = JSON.parse(await api.getContact(session, seq));
         seq = getContact_data.seq
         getContact_data.MemberList.forEach(c => {
             updateContact(c);
@@ -137,12 +127,12 @@ async function refreshContact() {
             loop();
     }
     await loop();
-    console.log('[*]成功获取联系人:' + session.contacts.length)
+    console.log('[*]成功获取联系人:' + db.contacts.length)
     let str = '';
-    for (let index = 1; index < session.contacts.length + 1; index++) {
-        const c = session.contacts[index - 1];
+    for (let index = 1; index < db.contacts.length + 1; index++) {
+        const c = db.contacts[index - 1];
         c.index = index;
-        str += `  ${c.rttype.substr(0,1).toUpperCase()}(${index})` + c.NickName;
+        str += `  ${c.rttype.substr(0, 1).toUpperCase()}(${index})` + c.NickName;
         if (index % 5 == 0) {
             console.log('[*]' + str);
             str = ''
@@ -152,7 +142,7 @@ async function refreshContact() {
 }
 
 function updateContact(c) {
-    let existContact = session.contacts.find(f => c.UserName == f.UserName);
+    let existContact = db.contacts.find(f => c.UserName == f.UserName);
     if (existContact) {
         existContact.updatedon = new Date().toLocaleString();
         //...其他更新
@@ -162,7 +152,7 @@ function updateContact(c) {
         existContact = c;
         c.updatedon = new Date().toLocaleString();
         c.NickName = emoji.normalize(c.NickName);
-        session.contacts.push(c);
+        db.contacts.push(c);
     }
     setRuntimeType(existContact);
 }
@@ -177,11 +167,12 @@ function setRuntimeType(existContact) {
     } else if (helper.isChatRoom(existContact)) {
         existContact.rttype = 'room';
     } else if (helper.isChatRoomRemoved(existContact)) {
-        existContact.rttype = 'roomRemoved';
+        existContact.rttype = 'deletedRoom';
     }
     else if (helper.isContact(existContact, session)) {
         existContact.rttype = 'contact';
     } else {
+        existContact.rttype = 'toaddcontact';
         console.error('rttype设置失败：' + JSON.stringify(existContact))
     }
 }
@@ -189,12 +180,12 @@ function setRuntimeType(existContact) {
 async function keepalive() {
     console.log('[*]进入消息监听模式 ... 成功');
     let errcount = 0
-    let loop = async() => {
-        if (!api.config.rt || errcount > 20) {
+    let loop = async () => {
+        if (!session || !session.pass_ticket || errcount > 20) {
             return;
         }
         try {
-            var response_syncCheck_data = await api.syncCheck()
+            var response_syncCheck_data = await api.syncCheck(session)
             let window = {};
             eval(response_syncCheck_data);
             let retcode = +window.synccheck.retcode
@@ -213,7 +204,7 @@ async function keepalive() {
                 // 7, Exit or enter
                 if (selector == 2) {
                     console.log('[*]你有新的消息，请注意查收')
-                    // await this.getNewMessage();
+                    await getNewMessage();
                 } else if (selector == 6) {
                     console.log('[*] 收到疑似红包消息')
                 } else if (selector == 7) {
@@ -233,57 +224,56 @@ async function keepalive() {
         }
         setTimeout(() => {
             return loop()
-        }, 60 * 1000)
+        }, 10 * 1000)
     }
     if (await loop() == 'restart')
         restart();
 }
 
 async function getNewMessage() {
-    let auth = session.auth;
-    let response = await api.webWxSync();
+    let rd = JSON.parse(await api.webWxSync(session));
     let mods = [];
 
     // Refresh the sync keys
-    api.config.SyncKey = response.data.SyncCheckKey;
+    session.auth.SyncKey = rd.SyncCheckKey;
 
     // Get the new friend, or chat room has change
-    response.data.ModContactList.map(c => {
-        if (session.contacts.find(f => f.UserName == c.UserName))
+    rd.ModContactList.map(c => {
+        if (db.contacts.find(f => f.UserName == c.UserName))
             updateContact(c);
         else mods.push(c.UserName)
     });
 
     // Delete user
-    response.data.DelContactList.map(c => {
-        session.contacts.shift(f => f.UserName == c.UserName);
+    rd.DelContactList.map(c => {
+        db.contacts.shift(f => f.UserName == c.UserName);
         console.log('删除联系人：' + c.NickName);
     });
 
     if (mods.length) {
         debug('新增联系人数量：' + mods.length)
-        let rp_data = JSON.parse(await api.getContact(0, mods));
+        let rp_data = JSON.parse(await api.getContact(session, 0, mods));
         rp_data.MemberList.forEach(c => {
             updateContact(c);
             debug('成功更新联系人：' + c.NickName);
         });
     }
 
-    response.data.AddMsgList.map(e => {
-        var from = e.FromUserName;
-        var to = e.ToUserName;
-        var fromYourPhone = from === self.user.User.UserName && from !== to;
+    rd.AddMsgList.map(e => {
+        // var from = e.FromUserName;
+        // var to = e.ToUserName;
+        // var fromYourPhone = from === self.user.User.UserName && from !== to;
 
         e.Content = emoji.normalize(e.Content);
-
-        console.log(JSON.stringify(e));
+        console.log(e.Content);
+        debug(JSON.stringify(e));
     });
 
-    return response.data;
+    return rd;
 }
 
 
-rl.on('line', async(line) => {
+rl.on('line', async (line) => {
     switch (line.toLowerCase().trim()) {
         case '#':
             rl.setPrompt('> ');
@@ -304,7 +294,7 @@ rl.on('line', async(line) => {
     if (line.toLowerCase().startsWith('#c')) {
         if (line.toLowerCase() == '#c') {
             let str = '';
-            session.contacts.filter(f => f.rttype == 'contact').forEach((c, index) => {
+            db.contacts.filter(f => f.rttype == 'contact').forEach((c, index) => {
                 str += `  (${c.index})` + c.NickName;
                 if (index % 5 == 1) {
                     console.log('[*]' + str);
@@ -315,12 +305,12 @@ rl.on('line', async(line) => {
         } else {
             let contactindex = parseInt(line.substr(2));
             if (contactindex >= 0) {
-                session.toUser = session.contacts.find(f => f.index == contactindex);
+                session.toUser = db.contacts.find(f => f.index == contactindex);
                 rl.setPrompt(session.toUser.NickName + '>');
             }
         }
     } else if (session.toUser) {
-        await api.wxSendTextMsg(line, session.auth.User.UserName, session.toUser.UserName)
+        await api.wxSendTextMsg(session, line, session.auth.User.UserName, session.toUser.UserName)
     }
     if (!line.startsWith('[*]'))
         rl.prompt();
