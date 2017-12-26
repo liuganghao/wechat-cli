@@ -2,12 +2,12 @@
 //var wx = require('./lib/session')
 // var storage = require('./lib/localdb').message
 // var RemoteDB = require('./lib/leandb')
-
+const qs = require('querystring');
 const fs = require('fs-extra');
 const path = require('path');
 const _debug = require('debug')
 //const setting = require('./rt/demo_turing.json');
-
+const xml2js = require('xml2js');
 const api = require('./lib/wxapi')
 const emoji = require('./lib/emoji');
 var session = {};
@@ -16,6 +16,8 @@ const helper = require('./lib/helper');
 const readline = require('readline');
 var db = { contacts: [], messages: [] };
 const debug = _debug('nodecli');
+
+const mime = require('mime/lite');
 
 // 对Date的扩展，将 Date 转化为指定格式的String
 // 月(M)、日(d)、小时(h)、分(m)、秒(s)、季度(q) 可以用 1-2 个占位符， 
@@ -38,6 +40,17 @@ Date.prototype.Format = function (fmt) { //author: meizz
         if (new RegExp("(" + k + ")").test(fmt)) fmt = fmt.replace(RegExp.$1, (RegExp.$1.length == 1) ? (o[k]) : (("00" + o[k]).substr(("" + o[k]).length)));
     return fmt;
 }
+String.prototype.xmlStr2Obj = function () {
+    let xml = this.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+    return new Promise(function (resolve, reject) {
+        xml2js.parseString(xml, (err, r) => {
+            if (err) reject(err);
+            else resolve(r);
+        })
+    })
+}
+
+
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -47,11 +60,12 @@ const rl = readline.createInterface({
 async function start() {
     if (fs.existsSync(path.resolve(__dirname, './rt/session.r.json'))) {
         session = require('./rt/session.r.json');
-        if (fs.existsSync(path.resolve(__dirname, './rt/contacts.r.json'))) {
-            db.contacts = fs.readJsonSync(path.resolve(__dirname, './rt/contacts.r.json'))
-        } else {
-            refreshContact();
-        }
+        await refreshContact()
+        // if (fs.existsSync(path.resolve(__dirname, './rt/contacts.r.json'))) {
+        //     db.contacts = fs.readJsonSync(path.resolve(__dirname, './rt/contacts.r.json'))
+        // } else {
+        //     refreshContact();
+        // }
     }
     if (session && session.pass_ticket) {
         keepalive();
@@ -95,6 +109,7 @@ async function waitForLogin(code) {
 
             // Set your weChat network route, otherwise you will got a code '1102'
             session.host = authAddress;
+            axios.default.baseURL = authAddress;
             // Login success, create session
             let rd = await api.login(session, window.redirect_uri);
             try {
@@ -118,7 +133,7 @@ async function waitForLogin(code) {
             })
 
             fs.writeJsonSync('./rt/session.r.json', session);
-            refreshContact();
+            await refreshContact();
             keepalive();
             break;
         case 201:
@@ -162,7 +177,7 @@ async function refreshContact() {
             loop();
     }
     await loop();
-    fs.writeJsonSync(path.resolve(__dirname, './rt/contacts.r.json'), db.contacts);
+    //fs.writeJsonSync(path.resolve(__dirname, './rt/contacts.r.json'), db.contacts);
     console.log('[*]成功获取联系人:' + db.contacts.length)
     let str = '';
     for (let index = 1; index < db.contacts.length + 1; index++) {
@@ -261,13 +276,13 @@ async function keepalive() {
         }
         setTimeout(() => {
             return loop()
-        }, 5 * 1000)
+        }, 3 * 1000)
     }
     if (await loop() == 'restart')
         restart();
 }
 
-function resolveMessage(message) {
+async function resolveMessage(message) {
     message.from = db.contacts.find(f => f.UserName == message.FromUserName);
     message.to = session.auth.User;
     if (message.ToUserName != session.auth.User.UserName)
@@ -304,9 +319,11 @@ function resolveMessage(message) {
         case 3:
             // Image
             let image = helper.parseKV(content);
-            image.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${session.skey}`;
-            message.image = image;
-            console.log(message.from.NickName + ' 发送了一张图片:' + image.src);
+            let src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&MsgID=${message.MsgId}&skey=${session.skey}`;
+            //message.image = image;
+            console.log(message.from.NickName + ' 发送了一张图片:');
+            let response = await api.getMsgImg(session, message.MsgId);
+            fs.writeFileSync(path.resolve(__dirname, 'rt', message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type)), response.data);
             break;
 
         case 34:
@@ -361,16 +378,17 @@ function resolveMessage(message) {
             break;
         case 49:
             switch (message.AppMsgType) {
-                case 2000:
-                    // Transfer
-                    let { value } = helper.parseXml(message.Content, 'des');
-
+                case 2000:// Transfer
+                    let result = await message.Content.xmlStr2Obj();
                     message.MsgType += 2000;
                     message.transfer = {
-                        desc: value.des,
-                        money: +value.match(/[\d.]+元/)[0].slice(0, -1),
+                        title: result.msg.appmsg[0].title[0],
+                        money: result.msg.appmsg[0].wcpayinfo[0].feedesc[0],
                     };
-                    console.log(message.from.NickName + ' 转账给您:' + message.transfer.money);
+                    if (result.msg.appmsg[0].wcpayinfo[0].pay_memo && result.msg.appmsg[0].wcpayinfo[0].pay_memo.length > 0) {
+                        message.transfer.memo = result.msg.appmsg[0].wcpayinfo[0].pay_memo[0]
+                    }
+                    console.log(message.from.NickName + ' 转账给您:' + message.transfer.money + ' 备注：' + message.transfer.memo);
                     break;
                 case 2001:
                     console.log(message.from.NickName + ' 发了个红包给您:' + JSON.stringify(message));
@@ -418,7 +436,7 @@ function resolveMessage(message) {
                     };
                     // file.uid = await helper.getCookie('wxuin');
                     // file.ticket = await helper.getCookie('webwx_data_ticket');
-                    // file.download = `${axios.defaults.baseURL.replace(/^https:\/\//, 'https://file.')}cgi-bin/mmwebwx-bin/webwxgetmedia?sender=${message.FromUserName}&mediaid=${file.mediaId}&filename=${file.name}&fromuser=${file.uid}&pass_ticket=undefined&webwx_data_ticket=${file.ticket}`;
+                    file.download = `${axios.defaults.baseURL.replace(/^https:\/\//, 'https://file.')}cgi-bin/mmwebwx-bin/webwxgetmedia?sender=${message.FromUserName}&mediaid=${file.mediaId}&filename=${file.name}&fromuser=${file.uid}&pass_ticket=undefined&webwx_data_ticket=${file.ticket}`;
 
                     message.MsgType += 6;
                     message.file = file;
@@ -541,7 +559,7 @@ async function getNewMessage() {
         debug(JSON.stringify(e));
         let msg = resolveMessage(e);
         db.messages.push(msg);
-        fs.writeJSON('./rt/message.r.json', db.messages);
+        fs.writeJSONSync('./rt/message.r.json', db.messages);
     });
 
     return rd;
