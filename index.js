@@ -319,13 +319,13 @@ async function resolveMessage(message) {
         case 3:
             // Image
             let image = helper.parseKV(content);
-            let src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&MsgID=${message.MsgId}&skey=${session.skey}`;
             //message.image = image;
             console.log(message.from.NickName + ' 发送了一张图片:');
             let response = await api.getMsgImg(session, message.MsgId);
-            fs.writeFileSync(path.resolve(__dirname, 'rt', message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type)), response.data);
+            let src = path.resolve(__dirname, 'rt', message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type))
+            fs.writeFileSync(src, response.data);
+            message.filepath = src;
             break;
-
         case 34:
             // Voice
             let voice = helper.parseKV(content);
@@ -552,14 +552,14 @@ async function getNewMessage() {
         });
     }
 
-    rd.AddMsgList.map(e => {
+    rd.AddMsgList.map(async (e) => {
         // var from = e.FromUserName;
         // var to = e.ToUserName;
         // var fromYourPhone = from === self.user.User.UserName && from !== to;
         debug(JSON.stringify(e));
-        let msg = resolveMessage(e);
+        let msg = await resolveMessage(e);
         db.messages.push(msg);
-        fs.writeJSONSync('./rt/message.r.json', db.messages);
+        fs.writeJSON('./rt/message.r.json', db.messages);
     });
 
     return rd;
