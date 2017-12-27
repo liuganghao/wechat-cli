@@ -14,9 +14,10 @@ var session = {};
 const axios = require('axios');
 const helper = require('./lib/helper');
 const readline = require('readline');
-var db = { contacts: [], messages: [] };
+var db = { contacts: [], messages: [], chatlist: [] };
 const debug = _debug('nodecli');
-
+const low = require('lowdb')
+const FileSync = require('lowdb/adapters/FileSync')
 const mime = require('mime/lite');
 
 // 对Date的扩展，将 Date 转化为指定格式的String
@@ -49,8 +50,6 @@ String.prototype.xmlStr2Obj = function () {
         })
     })
 }
-
-
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -167,7 +166,7 @@ async function refreshContact() {
     let seq = 0;
     let loop = async () => {
         let getContact_data = JSON.parse(await api.getContact(session, seq));
-        seq = getContact_data.seq
+        seq = getContact_data.seq;
         getContact_data.MemberList.forEach(c => {
             updateContact(c);
             debug('refreshcontact成功获取联系人：' + c.NickName);
@@ -283,17 +282,26 @@ async function keepalive() {
 }
 
 async function resolveMessage(message) {
+
     message.from = db.contacts.find(f => f.UserName == message.FromUserName);
     message.to = session.auth.User;
+    let rt = {
+        fromNickName: message.from.NickName,
+        toNickName: message.to.NickName,
+        fromUserName: message.from.UserName,
+        createdon: new Date(message.CreateTime),
+        wxid: message.MsgId,
+    }
     if (message.ToUserName != session.auth.User.UserName)
         console.error('给我发消息为ToUserName啥不是当前登录用户？？');
     // var isChatRoom = helper.isChatRoom(message.FromUserName);
     // var content = (isChatRoom && !message.isme) ? message.Content.split(':<br/>')[1] : message.Content;
-    var content = emoji.normalize(message.Content);
+
     switch (message.MsgType) {
         case 1:
             // Text message and Location SubMsgType == 48
             if (message.Url && message.OriContent) {
+                rt.type = 'location';
                 // This message is a location
                 let parts = message.Content.split(':<br/>');
                 let location = helper.parseKV(message.OriContent);
@@ -311,29 +319,48 @@ async function resolveMessage(message) {
                 console.log('= 坐标(x,y):' + message.location.x + ' , ' + message.location.y)
                 console.log('= 图片:' + message.location.image)
                 console.log('=======================')
+                rt.content = {
+                    poiname: message.location.poiname,
+                    label: message.location.label,
+                    href: message.location.href,
+                    x: message.location.x,
+                    y: message.location.y,
+                    image: message.location.image
+                }
 
             } else {
+                var content = emoji.normalize(message.Content);
                 console.log(message.from.NickName + ' ：' + content)
+                rt.type = 'text';
+                rt.content = content;
             }
             break;
         case 3:
+            rt.type = 'image';
             // Image
             let image = helper.parseKV(content);
             //message.image = image;
-            console.log(message.from.NickName + ' 发送了一张图片:');
+
             let response = await api.getMsgImg(session, message.MsgId);
             let src = path.resolve(__dirname, 'rt', message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type))
             fs.writeFileSync(src, response.data);
             message.filepath = src;
+            console.log(message.from.NickName + ' 发送了一张图片:' + message.filepath);
+            rt.content = {
+                filepath: message.filepath
+            }
             break;
         case 34:
+            rt.type = 'voice';
             // Voice
             let voice = helper.parseKV(content);
             voice.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetvoice?&msgid=${message.MsgId}&skey=${session.skey}`;
             message.voice = voice;
             console.log(message.from.NickName + ' 发送了一段语音:' + voice.src);
+            //todo 
             break;
         case 42:
+            rt.type = 'contact';
             // Contact
             let contact = message.RecommendInfo;
 
@@ -348,19 +375,28 @@ async function resolveMessage(message) {
             console.log('= 地区:' + contact.Province + ' - ' + contact.City)
             console.log('= 性别:' + ['未知', '男', '女'][contact.Sex])
             console.log('=======================')
+            rt.content = {
+                NickName: contact.NickName,
+                Alias: contact.Alias,
+                City: contact.City,
+                Province: contact.Province,
+                Sex: contact.Sex,
+            }
             break;
         case 62:
         case 43:
+            rt.type = 'video';
             // Video
             let video = {
                 cover: `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&MsgId=${message.MsgId}&skey=${session.skey}&type=slave`,
                 src: `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetvideo?msgid=${message.MsgId}&skey=${session.skey}`,
             };
-
+            //todo
             message.video = video;
             console.log(message.from.NickName + ' 发送了一段视频:' + video.src);
             break;
         case 47:
+            rt.type = 'emoji';
             // External emoji
             if (!content) break;
 
@@ -371,12 +407,14 @@ async function resolveMessage(message) {
                 message.emoji = emoji;
                 console.log(message.from.NickName + ' 发送了一个动画表情:' + emoji.src);
             }
+            //todo
             break;
 
         case 48:
             console.log(message.from.NickName + ' LOCATION:' + JSON.stringify(message));
             break;
         case 49:
+            rt.type = 'transfer';
             switch (message.AppMsgType) {
                 case 2000:// Transfer
                     let result = await message.Content.xmlStr2Obj();
@@ -389,32 +427,40 @@ async function resolveMessage(message) {
                         message.transfer.memo = result.msg.appmsg[0].wcpayinfo[0].pay_memo[0]
                     }
                     console.log(message.from.NickName + ' 转账给您:' + message.transfer.money + ' 备注：' + message.transfer.memo);
+                    rt.content = message.transfer;
                     break;
                 case 2001:
+                    rt.type = 'redpackage';
                     console.log(message.from.NickName + ' 发了个红包给您:' + JSON.stringify(message));
                     break;
                 case 17:
+                    rt.type = 'locationsharing';
                     // Location sharing...
                     message.MsgType += 17;
                     console.log(JSON.stringify(message));
                     console.log(message.from.NickName + ' REALTIME_SHARE_LOCATION ...');
                     break;
                 case 16:
+                    rt.type = 'cardticket';
                     console.log(message.from.NickName + ' CARD_TICKET:' + JSON.stringify(message));
                     break;
                 case 15:
+                    rt.type = 'emtion';
                     console.log(message.from.NickName + ' EMOTION:' + JSON.stringify(message));
                     break;
                 case 13:
+                    rt.type = 'good';
                     console.log(message.from.NickName + ' GOOD:' + JSON.stringify(message));
                     break;
                 case 10:
+                    rt.type = 'scangood';
                     console.log(message.from.NickName + ' SCAN_GOOD:' + JSON.stringify(message));
                     break;
                 case 9:
                     console.log(message.from.NickName + ' GOOD:' + JSON.stringify(message));
                     break;
                 case 8:
+                    rt.type = 'animatedemoji'
                     // Animated emoji
                     if (!content) break;
 
@@ -427,6 +473,7 @@ async function resolveMessage(message) {
                     }
                     break;
                 case 6:
+                    rt.type = 'file'
                     // Receive file
                     let file = {
                         name: message.FileName,
@@ -451,6 +498,12 @@ async function resolveMessage(message) {
                     console.log('= 下载地址:' + file.download)
                     console.log('= 文件类型:' + file.extension)
                     console.log('=======================')
+                    rt.content = {
+                        name: file.name,
+                        size: file.size,
+                        path: '',
+                        extension: file.extension,
+                    }
                     break;
                 case 5:
                     console.log(message.from.NickName + ' URL:' + JSON.stringify(message));
@@ -468,6 +521,8 @@ async function resolveMessage(message) {
                     console.log(message.from.NickName + ' TEXT:' + JSON.stringify(message));
                     break;
                 default:
+                    rt.type = 'unknow';
+                    rt.content = JSON.stringify(message)
                     console.error('Unknow app message: %o', Object.assign({}, message));
                     message.Content = `收到一条暂不支持的消息类型，请在手机上查看（${message.FileName || 'No Title'}）。`;
                     message.MsgType = 19999;
@@ -515,12 +570,14 @@ async function resolveMessage(message) {
             break;
 
         default:
+            rt.type = 'unknow';
+            rt.content = JSON.stringify(message)
             // Unhandle message
             message.Content = 'Unknow message type: ' + message.MsgType;
             message.MsgType = 19999;
     }
 
-    return message;
+    return rt;
 }
 
 async function getNewMessage() {
@@ -558,8 +615,46 @@ async function getNewMessage() {
         // var fromYourPhone = from === self.user.User.UserName && from !== to;
         debug(JSON.stringify(e));
         let msg = await resolveMessage(e);
-        db.messages.push(msg);
-        fs.writeJSON('./rt/message.r.json', db.messages);
+        db.messages.push(e);
+        let mpath = path.resolve(__dirname, 'rt', e.from.NickName.substr(0, 5) + new Date().Format('MMdd') + '.msg.json')
+        let mfile = db.chatlist.find(f => f.file == mpath)
+        let data;
+        if (!mfile) {
+            data = low(new FileSync(mpath));
+            data.defaults({ msg: [], contact: { UserName: [] }, memberlist: [] })
+                .write()
+            db.chatlist.push({ from: e.from.NickName, file: mpath, data: data })
+        } else {
+            data = mfile.data;
+        }
+
+        const msgfromdata = data
+            .get('msg')
+            .find({ id: msg.wxid })
+            .value();
+        if (msgfromdata)
+            data.get('msg')
+                .find({ id: msg.wxid })
+                .assign({
+                    createdon: msg.CreateTime,
+                    from: e.from.NickName,
+                    fromwxid: e.from.UserName,
+                    content: msg.content,
+                    type: msg.type,
+                }).write();
+        else
+            data.get('msg')
+                .push({
+                    createdon: msg.CreateTime,
+                    from: e.from.NickName,
+                    fromwxid: e.from.UserName,
+                    content: msg.content,
+                    type: msg.type,
+                    id: msg.wxid
+                }).write();
+        // fs.writeJSON('./rt/' + e.from.NickName.substr(0, 5) + e.updatedon.Format('MMdd') + '.msg.json', mlist);
+        //db.messages.push(msg);
+        //fs.writeJSON('./rt/message.r.json', db.messages);
     });
 
     return rd;
