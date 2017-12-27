@@ -621,7 +621,7 @@ async function getNewMessage() {
         let data;
         if (!mfile) {
             data = low(new FileSync(mpath));
-            data.defaults({ msg: [], contact: { UserName: [] }, memberlist: [] })
+            data.defaults({ msg: [], contact: { wxid: [] }, memberlist: [] })
                 .write()
             db.chatlist.push({ from: e.from.NickName, file: mpath, data: data })
         } else {
