@@ -338,11 +338,12 @@ async function resolveMessage(message) {
         case 3:
             rt.type = 'image';
             // Image
-            let image = helper.parseKV(content);
+            let image = helper.parseKV(message.Content);
             //message.image = image;
 
             let response = await api.getMsgImg(session, message.MsgId);
-            let src = path.resolve(__dirname, 'rt', message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type))
+            fs.ensureDirSync(path.resolve(__dirname, 'rt', new Date().Format('MMdd')))
+            let src = path.resolve(__dirname, 'rt', new Date().Format('MMdd'), message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type))
             fs.writeFileSync(src, response.data);
             message.filepath = src;
             console.log(message.from.NickName + ' 发送了一张图片:' + message.filepath);
@@ -616,7 +617,8 @@ async function getNewMessage() {
         debug(JSON.stringify(e));
         let msg = await resolveMessage(e);
         db.messages.push(e);
-        let mpath = path.resolve(__dirname, 'rt', e.from.NickName.substr(0, 5) + new Date().Format('MMdd') + '.msg.json')
+        fs.ensureDirSync(path.resolve(__dirname, 'rt', new Date().Format('MMdd')))
+        let mpath = path.resolve(__dirname, 'rt', new Date().Format('MMdd'), e.from.NickName.substr(0, 5) + new Date().Format('MMdd') + '.msg.json')
         let mfile = db.chatlist.find(f => f.file == mpath)
         let data;
         if (!mfile) {
@@ -627,32 +629,36 @@ async function getNewMessage() {
         } else {
             data = mfile.data;
         }
+        var cfromdata = data.get('contact').value();
+        if (cfromdata.wxid.length == 0 || cfromdata.wxid.IndexOf(msg.fromNickName.UserName) < 0) {
+            cfromdata.wxid.push(e.from.UserName);
+            cfromdata.NickName = e.from.NickName;
+            cfromdata.UserName = e.from.UserName;
+            //todo avatar
 
+            //todo getUserInfo
+        }
         const msgfromdata = data
             .get('msg')
             .find({ id: msg.wxid })
             .value();
-        if (msgfromdata)
+        let msgobj = {
+            state: 'received',
+            createdon: msg.CreateTime,
+            from: e.from.NickName,
+            content: msg.content,
+            type: msg.type,
+            updatedon: new Date(),
+        }
+        if (msgfromdata) {
             data.get('msg')
                 .find({ id: msg.wxid })
-                .assign({
-                    createdon: msg.CreateTime,
-                    from: e.from.NickName,
-                    fromwxid: e.from.UserName,
-                    content: msg.content,
-                    type: msg.type,
-                }).write();
-        else
+                .assign(msgobj).write();
+        } else {
+            msgobj.id = msg.wxid;
             data.get('msg')
-                .push({
-                    createdon: msg.CreateTime,
-                    from: e.from.NickName,
-                    fromwxid: e.from.UserName,
-                    content: msg.content,
-                    type: msg.type,
-                    id: msg.wxid
-                }).write();
-        // fs.writeJSON('./rt/' + e.from.NickName.substr(0, 5) + e.updatedon.Format('MMdd') + '.msg.json', mlist);
+                .push(msgobj).write();
+        }  // fs.writeJSON('./rt/' + e.from.NickName.substr(0, 5) + e.updatedon.Format('MMdd') + '.msg.json', mlist);
         //db.messages.push(msg);
         //fs.writeJSON('./rt/message.r.json', db.messages);
     });
