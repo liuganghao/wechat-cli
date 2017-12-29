@@ -6,6 +6,7 @@ const qs = require('querystring');
 const fs = require('fs-extra');
 const path = require('path');
 const _debug = require('debug')
+const debug = _debug('nodecli');
 //const setting = require('./rt/demo_turing.json');
 const xml2js = require('xml2js');
 const api = require('./lib/wxapi')
@@ -14,8 +15,9 @@ var session = {};
 const axios = require('axios');
 const helper = require('./lib/helper');
 const readline = require('readline');
+const turingbot = require('./lib/turingBot.js')
 var db = { contacts: [], messages: [], chatlist: [] };
-const debug = _debug('nodecli');
+
 const low = require('lowdb')
 const FileSync = require('lowdb/adapters/FileSync')
 const mime = require('mime/lite');
@@ -134,6 +136,7 @@ async function waitForLogin(code) {
             fs.writeJsonSync('./rt/session.r.json', session);
             await refreshContact();
             keepalive();
+
             break;
         case 201:
             // Confirm to login
@@ -230,6 +233,7 @@ function setRuntimeType(existContact) {
 async function keepalive() {
     console.log('[*]进入消息监听模式 ... 成功');
     let errcount = 0
+    autoReplyText();
     let loop = async () => {
         if (!session || !session.pass_ticket || errcount > 20) {
             return;
@@ -273,12 +277,57 @@ async function keepalive() {
                 return loop()
             }, 3000)
         }
+
         setTimeout(() => {
             return loop()
         }, 3 * 1000)
     }
     if (await loop() == 'restart')
         restart();
+}
+
+async function autoReplyText() {
+    let loop = () => {
+        setReplyMessage();
+        sendMessage();
+
+        setTimeout(() => {
+            return loop()
+        }, 3 * 1000)
+    }
+    loop();
+}
+async function setReplyMessage() {
+    db.chatlist.forEach(async (chat) => {
+        let data = chat.data;
+        let msg = data.msg[data.msg.length - 1];
+        if (msg && msg.state == 'received' && msg.type == 'text') {
+            let r = await turingbot.reply(msg);
+            console.log('to ' + msg.from + ': ' + JSON.stringify(r));
+            let msgobj = {
+                state: 'sending',
+                createdon: new Date(),
+                content: r.text,
+                type: 'text',
+                updatedon: new Date(),
+            }
+            msgobj.id = new Date().getTime();
+            data.msg.push(msgobj)
+        }
+    })
+
+}
+async function sendMessage() {
+    db.chatlist.forEach(async (chat) => {
+        let data = chat.data;
+        data.msg.filter(f => f.state == 'sending').forEach(async (msg) => {
+            data.msg.find(f => f.id == msg.id).state = 'completed';
+            fs.writeJSONSync(chat.file, chat.data);
+            await api.wxSendTextMsg(session, msg.content, session.auth.User.UserName, data.contact.UserName)
+        })
+
+    })
+    //  await api.wxSendTextMsg(session, r.text, session.auth.User.UserName, data.get('contact').value().UserName)
 }
 
 async function resolveMessage(message) {
@@ -553,6 +602,7 @@ async function resolveMessage(message) {
             message.MsgType = 19999;
             break;
         case 10000:
+            console.log(message.Content);
             // let userid = message.FromUserName;
 
             // // Refresh the current chat room info
@@ -620,28 +670,26 @@ async function getNewMessage() {
         fs.ensureDirSync(path.resolve(__dirname, 'rt', new Date().Format('MMdd')))
         let mpath = path.resolve(__dirname, 'rt', new Date().Format('MMdd'), e.from.NickName.substr(0, 5) + new Date().Format('MMdd') + '.msg.json')
         let mfile = db.chatlist.find(f => f.file == mpath)
-        let data;
+
         if (!mfile) {
-            data = low(new FileSync(mpath));
-            data.defaults({ msg: [], contact: { wxid: [] }, memberlist: [] })
-                .write()
-            db.chatlist.push({ from: e.from.NickName, file: mpath, data: data })
-        } else {
-            data = mfile.data;
+            if (fs.existsSync(mpath)) {
+                mfile = {
+                    data: fs.readJSONSync(mpath), file: mpath
+                };
+            } else
+                mfile = { from: e.from.NickName, file: mpath, data: { msg: [], contact: { wxid: [] }, memberlist: [] } }
+            db.chatlist.push(mfile)
         }
-        var cfromdata = data.get('contact').value();
-        if (cfromdata.wxid.length == 0 || cfromdata.wxid.IndexOf(msg.fromNickName.UserName) < 0) {
-            cfromdata.wxid.push(e.from.UserName);
-            cfromdata.NickName = e.from.NickName;
-            cfromdata.UserName = e.from.UserName;
+        let data = mfile.data;
+        if (data.contact.wxid.length == 0 || !data.contact.wxid.find(f => f == msg.fromUserName)) {
+            data.contact.wxid.push(e.from.UserName);
+            data.contact.NickName = e.from.NickName;
+            data.contact.UserName = e.from.UserName;
             //todo avatar
 
             //todo getUserInfo
         }
-        const msgfromdata = data
-            .get('msg')
-            .find({ id: msg.wxid })
-            .value();
+        const msgfromdata = data.msg.find(f => f.id == msg.wxid);
         let msgobj = {
             state: 'received',
             createdon: msg.CreateTime,
@@ -650,15 +698,13 @@ async function getNewMessage() {
             type: msg.type,
             updatedon: new Date(),
         }
-        if (msgfromdata) {
-            data.get('msg')
-                .find({ id: msg.wxid })
-                .assign(msgobj).write();
-        } else {
+        if (!msgfromdata) {
+
             msgobj.id = msg.wxid;
-            data.get('msg')
-                .push(msgobj).write();
-        }  // fs.writeJSON('./rt/' + e.from.NickName.substr(0, 5) + e.updatedon.Format('MMdd') + '.msg.json', mlist);
+            data.msg.push(msgobj);
+        }
+        fs.writeJSONSync(mfile.file, mfile.data);
+        // fs.writeJSON('./rt/' + e.from.NickName.substr(0, 5) + e.updatedon.Format('MMdd') + '.msg.json', mlist);
         //db.messages.push(msg);
         //fs.writeJSON('./rt/message.r.json', db.messages);
     });
