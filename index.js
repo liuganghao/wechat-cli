@@ -259,9 +259,8 @@ async function keepalive() {
                 // 7, Exit or enter
                 if (selector == 2) {
                     console.log('[*]你有新的消息，请注意查收')
-                    await getNewMessage();
                 } else if (selector == 6) {
-                    console.log('[*] 收到疑似红包消息')
+                    console.log('[*] 新好友加入')
                 } else if (selector == 7) {
                     console.log('[*] 你在手机上玩微信被我发现了')
                 } else if (selector == 0) {
@@ -269,6 +268,7 @@ async function keepalive() {
                 } else {
                     console.log('[*] 这个消息无法处理retcode:0,selector:' + selector)
                 }
+                await getNewMessage();
             }
         } catch (err) {
             console.error(err);
