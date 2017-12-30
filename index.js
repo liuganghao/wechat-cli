@@ -16,7 +16,11 @@ const axios = require('axios');
 const helper = require('./lib/helper');
 const readline = require('readline');
 const turingbot = require('./lib/turingBot.js')
-var db = { contacts: [], messages: [], chatlist: [] };
+var db = {
+    contacts: [],
+    messages: [],
+    chatlist: []
+};
 
 const low = require('lowdb')
 const FileSync = require('lowdb/adapters/FileSync')
@@ -127,6 +131,7 @@ async function waitForLogin(code) {
             fs.writeJsonSync('./rt/session.r.json', session);
 
             db.contacts = session.auth.ContactList;
+
             db.contacts.forEach(c => {
                 c.updatedon = new Date().toLocaleString();
                 c.NickName = emoji.parser(c.NickName);
@@ -167,7 +172,8 @@ async function waitForLogin(code) {
 }
 async function refreshContact() {
     let seq = 0;
-    let loop = async () => {
+    updateContact(session.auth.User)
+    let loop = async() => {
         let getContact_data = JSON.parse(await api.getContact(session, seq));
         seq = getContact_data.seq;
         getContact_data.MemberList.forEach(c => {
@@ -221,9 +227,10 @@ function setRuntimeType(existContact) {
         existContact.rttype = 'room';
     } else if (helper.isChatRoomRemoved(existContact)) {
         existContact.rttype = 'deletedRoom';
-    }
-    else if (helper.isContact(existContact, session)) {
+    } else if (helper.isContact(existContact, session)) {
         existContact.rttype = 'contact';
+        if (existContact.UserName == session.auth.User.UserName)
+            existContact.rttype = 'me';
     } else {
         existContact.rttype = 'toaddcontact';
         console.error('rttype设置失败：' + JSON.stringify(existContact))
@@ -234,7 +241,7 @@ async function keepalive() {
     console.log('[*]进入消息监听模式 ... 成功');
     let errcount = 0
     autoReplyText();
-    let loop = async () => {
+    let loop = async() => {
         if (!session || !session.pass_ticket || errcount > 20) {
             return;
         }
@@ -257,18 +264,22 @@ async function keepalive() {
                 // 6, New friend
                 // 4, Conversation refresh ?
                 // 7, Exit or enter
-                if (selector == 2) {
-                    console.log('[*]你有新的消息，请注意查收')
-                } else if (selector == 6) {
-                    console.log('[*] 新好友加入')
-                } else if (selector == 7) {
-                    console.log('[*] 你在手机上玩微信被我发现了')
-                } else if (selector == 0) {
-                    //console.log('[*] 收到疑似红包消息')
+                if (selector != 0) {
+                    await getNewMessage();
                 } else {
-                    console.log('[*] 这个消息无法处理retcode:0,selector:' + selector)
+                    if (selector == 2) {
+                        console.log('[*]你有新的消息，请注意查收')
+                    } else if (selector == 6) {
+                        console.log('[*] 新好友加入')
+                    } else if (selector == 7) {
+                        console.log('[*] 你在手机上玩微信被我发现了')
+                    } else if (selector == 0) {
+                        console.log('心跳。。。');
+                    } else {
+                        console.log('[*] 这个消息无法处理retcode:0,selector:' + selector)
+                    }
                 }
-                await getNewMessage();
+
             }
         } catch (err) {
             console.error(err);
@@ -298,7 +309,7 @@ async function autoReplyText() {
     loop();
 }
 async function setReplyMessage() {
-    db.chatlist.forEach(async (chat) => {
+    db.chatlist.forEach(async(chat) => {
         let data = chat.data;
         let msg = data.msg[data.msg.length - 1];
         if (msg && msg.state == 'received' && msg.type == 'text') {
@@ -318,9 +329,9 @@ async function setReplyMessage() {
 
 }
 async function sendMessage() {
-    db.chatlist.forEach(async (chat) => {
+    db.chatlist.forEach(async(chat) => {
         let data = chat.data;
-        data.msg.filter(f => f.state == 'sending').forEach(async (msg) => {
+        data.msg.filter(f => f.state == 'sending').forEach(async(msg) => {
             data.msg.find(f => f.id == msg.id).state = 'completed';
             fs.writeJSONSync(chat.file, chat.data);
             await api.wxSendTextMsg(session, msg.content, session.auth.User.UserName, data.contact.UserName)
@@ -333,7 +344,11 @@ async function sendMessage() {
 async function resolveMessage(message) {
 
     message.from = db.contacts.find(f => f.UserName == message.FromUserName);
-    message.to = session.auth.User;
+    message.to = db.contacts.find(f => f.UserName == message.ToUserName);
+    if (!message.from) {
+        console.error('未找到发消息的联系人：' + message.FromUserName)
+        console.log(JSON.stringify(message))
+    }
     let rt = {
         fromNickName: message.from.NickName,
         toNickName: message.to.NickName,
@@ -341,8 +356,8 @@ async function resolveMessage(message) {
         createdon: new Date(message.CreateTime),
         wxid: message.MsgId,
     }
-    if (message.ToUserName != session.auth.User.UserName)
-        console.error('给我发消息为ToUserName啥不是当前登录用户？？');
+    // if (message.ToUserName != session.auth.User.UserName)
+    //     console.error('给我发消息为ToUserName啥不是当前登录用户？？');
     // var isChatRoom = helper.isChatRoom(message.FromUserName);
     // var content = (isChatRoom && !message.isme) ? message.Content.split(':<br/>')[1] : message.Content;
 
@@ -466,7 +481,7 @@ async function resolveMessage(message) {
         case 49:
             rt.type = 'transfer';
             switch (message.AppMsgType) {
-                case 2000:// Transfer
+                case 2000: // Transfer
                     let result = await message.Content.xmlStr2Obj();
                     message.MsgType += 2000;
                     message.transfer = {
@@ -593,7 +608,9 @@ async function resolveMessage(message) {
             break;
         case 10002:
             let text = isChatRoom ? message.Content.split(':<br/>').slice(-1).pop() : message.Content;
-            let { value } = helper.parseXml(text, ['replacemsg', 'msgid']);
+            let {
+                value
+            } = helper.parseXml(text, ['replacemsg', 'msgid']);
 
             if (!settings.blockRecall) {
                 self.deleteMessage(message.FromUserName, value.msgid);
@@ -660,7 +677,7 @@ async function getNewMessage() {
         });
     }
 
-    rd.AddMsgList.map(async (e) => {
+    rd.AddMsgList.map(async(e) => {
         // var from = e.FromUserName;
         // var to = e.ToUserName;
         // var fromYourPhone = from === self.user.User.UserName && from !== to;
@@ -674,10 +691,21 @@ async function getNewMessage() {
         if (!mfile) {
             if (fs.existsSync(mpath)) {
                 mfile = {
-                    data: fs.readJSONSync(mpath), file: mpath
+                    data: fs.readJSONSync(mpath),
+                    file: mpath
                 };
             } else
-                mfile = { from: e.from.NickName, file: mpath, data: { msg: [], contact: { wxid: [] }, memberlist: [] } }
+                mfile = {
+                    from: e.from.NickName,
+                    file: mpath,
+                    data: {
+                        msg: [],
+                        contact: {
+                            wxid: []
+                        },
+                        memberlist: []
+                    }
+                }
             db.chatlist.push(mfile)
         }
         let data = mfile.data;
@@ -713,7 +741,7 @@ async function getNewMessage() {
 }
 
 
-rl.on('line', async (line) => {
+rl.on('line', async(line) => {
     switch (line.toLowerCase().trim()) {
         case '#':
             rl.setPrompt('> ');
