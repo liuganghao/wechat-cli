@@ -173,7 +173,7 @@ async function waitForLogin(code) {
 async function refreshContact() {
     let seq = 0;
     updateContact(session.auth.User)
-    let loop = async() => {
+    let loop = async () => {
         let getContact_data = JSON.parse(await api.getContact(session, seq));
         seq = getContact_data.seq;
         getContact_data.MemberList.forEach(c => {
@@ -191,7 +191,7 @@ async function refreshContact() {
     for (let index = 1; index < db.contacts.length + 1; index++) {
         const c = db.contacts[index - 1];
         c.index = index;
-        str += `  ${c.rttype.substr(0, 1).toUpperCase()}(${index})` + c.NickName;
+        str += `  ${c.type.substr(0, 1).toUpperCase()}(${index})` + c.NickName;
         if (index % 5 == 0) {
             console.log('[*]' + str);
             str = ''
@@ -218,22 +218,22 @@ function updateContact(c) {
 
 function setRuntimeType(existContact) {
     if (helper.isSpecialUsers(existContact)) {
-        existContact.rttype = 'special';
+        existContact.type = 'special';
     } else if (helper.isOfficial(existContact)) {
-        existContact.rttype = 'official';
+        existContact.type = 'official';
     } else if (helper.isBrand(existContact)) {
-        existContact.rttype = 'brand';
+        existContact.type = 'brand';
     } else if (helper.isChatRoom(existContact)) {
-        existContact.rttype = 'room';
+        existContact.type = 'room';
     } else if (helper.isChatRoomRemoved(existContact)) {
-        existContact.rttype = 'deletedRoom';
+        existContact.type = 'deletedRoom';
     } else if (helper.isContact(existContact, session)) {
-        existContact.rttype = 'contact';
+        existContact.type = 'contact';
         if (existContact.UserName == session.auth.User.UserName)
-            existContact.rttype = 'me';
+            existContact.type = 'me';
     } else {
-        existContact.rttype = 'toaddcontact';
-        console.error('rttype设置失败：' + JSON.stringify(existContact))
+        existContact.type = 'toaddcontact';
+        console.error('type设置失败：' + JSON.stringify(existContact))
     }
 }
 
@@ -241,7 +241,7 @@ async function keepalive() {
     console.log('[*]进入消息监听模式 ... 成功');
     let errcount = 0
     autoReplyText();
-    let loop = async() => {
+    let loop = async () => {
         if (!session || !session.pass_ticket || errcount > 20) {
             return;
         }
@@ -274,7 +274,7 @@ async function keepalive() {
                     } else if (selector == 7) {
                         console.log('[*] 你在手机上玩微信被我发现了')
                     } else if (selector == 0) {
-                        console.log('心跳。。。');
+                        console.log(new Date().toString() + ':心跳。。。');
                     } else {
                         console.log('[*] 这个消息无法处理retcode:0,selector:' + selector)
                     }
@@ -299,7 +299,28 @@ async function keepalive() {
 
 async function autoReplyText() {
     let loop = () => {
-        setReplyMessage();
+        db.chatlist.forEach(async (chat) => {
+            switch (chat.data.contact.type) {
+                case 'special':
+                    break;
+                case 'official':
+                    break;
+                case 'brand':
+                    break;
+                case 'room':
+                    break;
+                case 'deletedRoom':
+                    break;
+                case 'contact':
+                    setReplyMessage(chat);
+                    break;
+                case 'me':
+                    break;
+                default:
+                    break;
+            }
+        })
+
         sendMessage();
 
         setTimeout(() => {
@@ -308,30 +329,30 @@ async function autoReplyText() {
     }
     loop();
 }
-async function setReplyMessage() {
-    db.chatlist.forEach(async(chat) => {
-        let data = chat.data;
-        let msg = data.msg[data.msg.length - 1];
-        if (msg && msg.state == 'received' && msg.type == 'text') {
-            let r = await turingbot.reply(msg);
-            console.log('to ' + msg.from + ': ' + JSON.stringify(r));
-            let msgobj = {
-                state: 'sending',
-                createdon: new Date(),
-                content: r.text,
-                type: 'text',
-                updatedon: new Date(),
-            }
-            msgobj.id = new Date().getTime();
-            data.msg.push(msgobj)
+async function setReplyMessage(chat) {
+    let setReplyMessage
+    let data = chat.data;
+    let msg = data.msg[data.msg.length - 1];
+    if (msg && msg.state == 'received' && msg.type == 'text') {
+        let r = await turingbot.reply(msg);
+        console.log('to ' + msg.from + ': ' + JSON.stringify(r));
+        let msgobj = {
+            state: 'sending',
+            createdon: new Date(),
+            content: r.text,
+            type: 'text',
+            updatedon: new Date(),
         }
-    })
+        msgobj.id = new Date().getTime();
+        data.msg.push(msgobj)
+    }
+
 
 }
 async function sendMessage() {
-    db.chatlist.forEach(async(chat) => {
+    db.chatlist.forEach(async (chat) => {
         let data = chat.data;
-        data.msg.filter(f => f.state == 'sending').forEach(async(msg) => {
+        data.msg.filter(f => f.state == 'sending').forEach(async (msg) => {
             data.msg.find(f => f.id == msg.id).state = 'completed';
             fs.writeJSONSync(chat.file, chat.data);
             await api.wxSendTextMsg(session, msg.content, session.auth.User.UserName, data.contact.UserName)
@@ -677,7 +698,7 @@ async function getNewMessage() {
         });
     }
 
-    rd.AddMsgList.map(async(e) => {
+    rd.AddMsgList.map(async (e) => {
         // var from = e.FromUserName;
         // var to = e.ToUserName;
         // var fromYourPhone = from === self.user.User.UserName && from !== to;
@@ -713,6 +734,7 @@ async function getNewMessage() {
             data.contact.wxid.push(e.from.UserName);
             data.contact.NickName = e.from.NickName;
             data.contact.UserName = e.from.UserName;
+            data.contact.type = e.from.type;
             //todo avatar
 
             //todo getUserInfo
@@ -741,7 +763,7 @@ async function getNewMessage() {
 }
 
 
-rl.on('line', async(line) => {
+rl.on('line', async (line) => {
     switch (line.toLowerCase().trim()) {
         case '#':
             rl.setPrompt('> ');
@@ -762,7 +784,7 @@ rl.on('line', async(line) => {
     if (line.toLowerCase().startsWith('#c')) {
         if (line.toLowerCase() == '#c') {
             let str = '';
-            db.contacts.filter(f => f.rttype == 'contact').forEach((c, index) => {
+            db.contacts.filter(f => f.type == 'contact').forEach((c, index) => {
                 str += `  (${c.index})` + c.NickName;
                 if (index % 5 == 1) {
                     console.log('[*]' + str);
