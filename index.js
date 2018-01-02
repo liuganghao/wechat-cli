@@ -274,7 +274,7 @@ async function keepalive() {
                     } else if (selector == 7) {
                         console.log('[*] 你在手机上玩微信被我发现了')
                     } else if (selector == 0) {
-                        console.log(new Date().toString() + ':心跳。。。');
+                        console.log(new Date().toLocaleString() + ':心跳。。。');
                     } else {
                         console.log('[*] 这个消息无法处理retcode:0,selector:' + selector)
                     }
@@ -300,7 +300,7 @@ async function keepalive() {
 async function autoReplyText() {
     let loop = () => {
         db.chatlist.forEach(async (chat) => {
-            switch (chat.data.contact.type) {
+            switch (chat.data.chatroom.type) {
                 case 'special':
                     break;
                 case 'official':
@@ -355,7 +355,7 @@ async function sendMessage() {
         data.msg.filter(f => f.state == 'sending').forEach(async (msg) => {
             data.msg.find(f => f.id == msg.id).state = 'completed';
             fs.writeJSONSync(chat.file, chat.data);
-            await api.wxSendTextMsg(session, msg.content, session.auth.User.UserName, data.contact.UserName)
+            await api.wxSendTextMsg(session, msg.content, session.auth.User.UserName, data.chatroom.UserName)
         })
 
     })
@@ -363,24 +363,44 @@ async function sendMessage() {
 }
 
 async function resolveMessage(message) {
-
+    let isChatRoom = false;
     message.from = db.contacts.find(f => f.UserName == message.FromUserName);
-    message.to = db.contacts.find(f => f.UserName == message.ToUserName);
+    message.chatroom = message.from;
+    var content = message.Content;
+    if (message.FromUserName && message.FromUserName.startsWith('@@')) {
+        isChatRoom = true;
+        if (!message.from) {
+            let rdata = JSON.parse(await api.getGroupList(session, [message.FromUserName]));
+            rdata.ContactList.map(c => {
+                if (db.contacts.find(f => f.UserName == c.UserName))
+                    updateContact(c);
+                else
+                    db.contacts.push(c);
+                setRuntimeType(c);
+
+            });
+        }
+        message.chatroom = db.contacts.find(f => f.UserName == message.FromUserName);
+        message.from = db.contacts.find(f => f.UserName == message.Content.split(':<br/>')[0]);
+        //message.Content = message.Content.split(':<br/>')[1];
+        content = message.Content.split(':<br/>')[1];
+    }
+
     if (!message.from) {
         console.error('未找到发消息的联系人：' + message.FromUserName)
         console.log(JSON.stringify(message))
+        return;
     }
+
     let rt = {
-        fromNickName: message.from.NickName,
-        toNickName: message.to.NickName,
-        fromUserName: message.from.UserName,
         createdon: new Date(message.CreateTime),
         wxid: message.MsgId,
+        fromContactCode: message.from.UserName,
+        fromContactName: message.from.NickName,
+        chatName: message.chatroom.NickName,
+        chatCode: message.chatroom.UserName
     }
-    // if (message.ToUserName != session.auth.User.UserName)
-    //     console.error('给我发消息为ToUserName啥不是当前登录用户？？');
     // var isChatRoom = helper.isChatRoom(message.FromUserName);
-    // var content = (isChatRoom && !message.isme) ? message.Content.split(':<br/>')[1] : message.Content;
 
     switch (message.MsgType) {
         case 1:
@@ -388,7 +408,7 @@ async function resolveMessage(message) {
             if (message.Url && message.OriContent) {
                 rt.type = 'location';
                 // This message is a location
-                let parts = message.Content.split(':<br/>');
+                let parts = content.split(':<br/>');
                 let location = helper.parseKV(message.OriContent);
 
                 location.image = `https://${session.host}/${parts[1]}`.replace(/\/+/g, '/');
@@ -396,7 +416,7 @@ async function resolveMessage(message) {
 
                 message.location = location;
 
-                console.log(message.from.NickName + ' 发送了一个 位置消息 - 我在 ' + message.location.poiname)
+                console.log(message.chatroom.NickName + ' 发送了一个 位置消息 - 我在 ' + message.location.poiname)
                 console.log('=======================')
                 console.log('= 标题:' + message.location.poiname)
                 console.log('= 描述:' + message.location.label)
@@ -414,8 +434,8 @@ async function resolveMessage(message) {
                 }
 
             } else {
-                var content = emoji.normalize(message.Content);
-                console.log(message.from.NickName + ' ：' + content)
+                var content = emoji.normalize(content);
+                console.log(message.chatroom.NickName + ' ：' + content)
                 rt.type = 'text';
                 rt.content = content;
             }
@@ -423,7 +443,7 @@ async function resolveMessage(message) {
         case 3:
             rt.type = 'image';
             // Image
-            let image = helper.parseKV(message.Content);
+            let image = helper.parseKV(content);
             //message.image = image;
 
             let response = await api.getMsgImg(session, message.MsgId);
@@ -431,7 +451,7 @@ async function resolveMessage(message) {
             let src = path.resolve(__dirname, 'rt', new Date().Format('MMdd'), message.from.NickName + '_' + message.MsgId + '.' + mime.getExtension(response.type))
             fs.writeFileSync(src, response.data);
             message.filepath = src;
-            console.log(message.from.NickName + ' 发送了一张图片:' + message.filepath);
+            console.log(message.chatroom.NickName + ' 发送了一张图片:' + message.filepath);
             rt.content = {
                 filepath: message.filepath
             }
@@ -442,7 +462,7 @@ async function resolveMessage(message) {
             let voice = helper.parseKV(content);
             voice.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetvoice?&msgid=${message.MsgId}&skey=${session.skey}`;
             message.voice = voice;
-            console.log(message.from.NickName + ' 发送了一段语音:' + voice.src);
+            console.log(message.chatroom.NickName + ' 发送了一段语音:' + voice.src);
             //todo 
             break;
         case 42:
@@ -454,7 +474,7 @@ async function resolveMessage(message) {
             contact.name = contact.NickName;
             contact.address = `${contact.Province || 'UNKNOW'}, ${contact.City || 'UNKNOW'}`;
             message.contact = contact;
-            console.log(message.from.NickName + ' 发送了一张名片:');
+            console.log(message.chatroom.NickName + ' 发送了一张名片:');
             console.log('=======================')
             console.log('= 昵称:' + contact.NickName)
             console.log('= 微信号:' + contact.Alias)
@@ -479,7 +499,7 @@ async function resolveMessage(message) {
             };
             //todo
             message.video = video;
-            console.log(message.from.NickName + ' 发送了一段视频:' + video.src);
+            console.log(message.chatroom.NickName + ' 发送了一段视频:' + video.src);
             break;
         case 47:
             rt.type = 'emoji';
@@ -491,19 +511,19 @@ async function resolveMessage(message) {
 
                 emoji.src = `https://${session.host}/cgi-bin/mmwebwx-bin/webwxgetmsgimg?&msgid=${message.MsgId}&skey=${session.skey}`;
                 message.emoji = emoji;
-                console.log(message.from.NickName + ' 发送了一个动画表情:' + emoji.src);
+                console.log(message.chatroom.NickName + ' 发送了一个动画表情:' + emoji.src);
             }
             //todo
             break;
 
         case 48:
-            console.log(message.from.NickName + ' LOCATION:' + JSON.stringify(message));
+            console.log(message.chatroom.NickName + ' LOCATION:' + JSON.stringify(message));
             break;
         case 49:
             rt.type = 'transfer';
             switch (message.AppMsgType) {
                 case 2000: // Transfer
-                    let result = await message.Content.xmlStr2Obj();
+                    let result = await content.xmlStr2Obj();
                     message.MsgType += 2000;
                     message.transfer = {
                         title: result.msg.appmsg[0].title[0],
@@ -512,38 +532,38 @@ async function resolveMessage(message) {
                     if (result.msg.appmsg[0].wcpayinfo[0].pay_memo && result.msg.appmsg[0].wcpayinfo[0].pay_memo.length > 0) {
                         message.transfer.memo = result.msg.appmsg[0].wcpayinfo[0].pay_memo[0]
                     }
-                    console.log(message.from.NickName + ' 转账给您:' + message.transfer.money + ' 备注：' + message.transfer.memo);
+                    console.log(message.chatroom.NickName + ' 转账给您:' + message.transfer.money + ' 备注：' + message.transfer.memo);
                     rt.content = message.transfer;
                     break;
                 case 2001:
                     rt.type = 'redpackage';
-                    console.log(message.from.NickName + ' 发了个红包给您:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' 发了个红包给您:' + JSON.stringify(message));
                     break;
                 case 17:
                     rt.type = 'locationsharing';
                     // Location sharing...
                     message.MsgType += 17;
                     console.log(JSON.stringify(message));
-                    console.log(message.from.NickName + ' REALTIME_SHARE_LOCATION ...');
+                    console.log(message.chatroom.NickName + ' REALTIME_SHARE_LOCATION ...');
                     break;
                 case 16:
                     rt.type = 'cardticket';
-                    console.log(message.from.NickName + ' CARD_TICKET:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' CARD_TICKET:' + JSON.stringify(message));
                     break;
                 case 15:
                     rt.type = 'emtion';
-                    console.log(message.from.NickName + ' EMOTION:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' EMOTION:' + JSON.stringify(message));
                     break;
                 case 13:
                     rt.type = 'good';
-                    console.log(message.from.NickName + ' GOOD:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' GOOD:' + JSON.stringify(message));
                     break;
                 case 10:
                     rt.type = 'scangood';
-                    console.log(message.from.NickName + ' SCAN_GOOD:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' SCAN_GOOD:' + JSON.stringify(message));
                     break;
                 case 9:
-                    console.log(message.from.NickName + ' GOOD:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' GOOD:' + JSON.stringify(message));
                     break;
                 case 8:
                     rt.type = 'animatedemoji'
@@ -577,7 +597,7 @@ async function resolveMessage(message) {
                         done: false,
                     };
 
-                    console.log(message.from.NickName + ' 分享了一个文件');
+                    console.log(message.chatroom.NickName + ' 分享了一个文件');
                     console.log('=======================')
                     console.log('= 文件名:' + file.name)
                     console.log('= 文件大小:' + file.size)
@@ -592,19 +612,19 @@ async function resolveMessage(message) {
                     }
                     break;
                 case 5:
-                    console.log(message.from.NickName + ' URL:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' URL:' + JSON.stringify(message));
                     break;
                 case 4:
-                    console.log(message.from.NickName + ' VIDEO:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' VIDEO:' + JSON.stringify(message));
                     break;
                 case 3:
-                    console.log(message.from.NickName + ' AUDIO:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' AUDIO:' + JSON.stringify(message));
                     break;
                 case 2:
-                    console.log(message.from.NickName + ' IMG:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' IMG:' + JSON.stringify(message));
                     break;
                 case 1:
-                    console.log(message.from.NickName + ' TEXT:' + JSON.stringify(message));
+                    console.log(message.chatroom.NickName + ' TEXT:' + JSON.stringify(message));
                     break;
                 default:
                     rt.type = 'unknow';
@@ -616,19 +636,19 @@ async function resolveMessage(message) {
             }
             break;
         case 50:
-            console.log(message.from.NickName + ' VOIPMSG:' + JSON.stringify(message));
+            console.log(message.chatroom.NickName + ' VOIPMSG:' + JSON.stringify(message));
             break;
         case 51:
-            console.log(message.from.NickName + ' STATUSNOTIFY:' + JSON.stringify(message));
+            console.log(message.chatroom.NickName + ' STATUSNOTIFY:' + JSON.stringify(message));
             break;
         case 52:
-            console.log(message.from.NickName + ' VOIPNOTIFY:' + JSON.stringify(message));
+            console.log(message.chatroom.NickName + ' VOIPNOTIFY:' + JSON.stringify(message));
             break;
         case 53:
-            console.log(message.from.NickName + ' VOIPINVITE:' + JSON.stringify(message));
+            console.log(message.chatroom.NickName + ' VOIPINVITE:' + JSON.stringify(message));
             break;
         case 10002:
-            let text = isChatRoom ? message.Content.split(':<br/>').slice(-1).pop() : message.Content;
+            let text = isChatRoom ? content.split(':<br/>').slice(-1).pop() : content;
             let {
                 value
             } = helper.parseXml(text, ['replacemsg', 'msgid']);
@@ -704,9 +724,10 @@ async function getNewMessage() {
         // var fromYourPhone = from === self.user.User.UserName && from !== to;
         debug(JSON.stringify(e));
         let msg = await resolveMessage(e);
+        if (!msg) return;
         db.messages.push(e);
         fs.ensureDirSync(path.resolve(__dirname, 'rt', new Date().Format('MMdd')))
-        let mpath = path.resolve(__dirname, 'rt', new Date().Format('MMdd'), e.from.NickName.substr(0, 5) + new Date().Format('MMdd') + '.msg.json')
+        let mpath = path.resolve(__dirname, 'rt', new Date().Format('MMdd'), e.chatroom.NickName.substr(0, 5) + new Date().Format('MMdd') + '.msg.json')
         let mfile = db.chatlist.find(f => f.file == mpath)
 
         if (!mfile) {
@@ -721,20 +742,20 @@ async function getNewMessage() {
                     file: mpath,
                     data: {
                         msg: [],
-                        contact: {
+                        chatroom: {
                             wxid: []
                         },
-                        memberlist: []
+                        memberlist: e.from.MemberList
                     }
                 }
             db.chatlist.push(mfile)
         }
         let data = mfile.data;
-        if (data.contact.wxid.length == 0 || !data.contact.wxid.find(f => f == msg.fromUserName)) {
-            data.contact.wxid.push(e.from.UserName);
-            data.contact.NickName = e.from.NickName;
-            data.contact.UserName = e.from.UserName;
-            data.contact.type = e.from.type;
+        if (data.chatroom.wxid.length == 0 || !data.chatroom.wxid.find(f => f == e.chatroom.UserName)) {
+            data.chatroom.wxid.push(e.chatroom.UserName);
+            data.chatroom.NickName = e.chatroom.NickName;
+            data.chatroom.UserName = e.chatroom.UserName;
+            data.chatroom.type = e.chatroom.type;
             //todo avatar
 
             //todo getUserInfo
@@ -743,7 +764,7 @@ async function getNewMessage() {
         let msgobj = {
             state: 'received',
             createdon: msg.CreateTime,
-            from: e.from.NickName,
+            from: e.chatroom.NickName,
             content: msg.content,
             type: msg.type,
             updatedon: new Date(),
