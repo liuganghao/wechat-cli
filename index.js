@@ -22,8 +22,6 @@ var db = {
     chatlist: []
 };
 
-const low = require('lowdb')
-const FileSync = require('lowdb/adapters/FileSync')
 const mime = require('mime/lite');
 
 // 对Date的扩展，将 Date 转化为指定格式的String
@@ -783,7 +781,6 @@ async function getNewMessage() {
     return rd;
 }
 
-
 rl.on('line', async (line) => {
     switch (line.toLowerCase().trim()) {
         case '#':
@@ -829,5 +826,4 @@ rl.on('line', async (line) => {
     console.log('Have a great day!');
     process.exit(0);
 });
-
-start();
+module.exports.start = start
